@@ -1,0 +1,157 @@
+# =============================================================================
+# Qwen3.8-27B (FP8) on vLLM 0.32.0 — the platform's primary model
+# Book: Sovereign AI Stacks, Chapter 5
+# Sizing (Chapter 2): 1 GPU per replica; FP8 weights 28.7 GiB, FP8 KV cache.
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-cache-qwen3-8-27b
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: ceph-block
+  resources:
+    requests:
+      storage: 40Gi          # 30.87 GB of weights plus headroom for an upgrade swap
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-qwen3-8-27b
+  labels:
+    app.kubernetes.io/name: vllm-qwen3-8-27b
+    app.kubernetes.io/component: model-server
+spec:
+  replicas: 1
+  # A replacement pod needs the same GPU and the same RWO volume; never run two.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vllm-qwen3-8-27b
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vllm-qwen3-8-27b
+        app.kubernetes.io/component: model-server
+        sovereign-ai/model: qwen3.8-27b
+    spec:
+      serviceAccountName: vllm
+      runtimeClassName: nvidia
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Fetch the pinned model from Harbor and verify every byte (oci_pull.py).
+        - name: model-fetch
+          image: docker.io/vllm/vllm-openai:v0.32.0
+          command: ["python3", "/scripts/oci_pull.py"]
+          args:
+            - "$(MODEL_REF)"
+            - /models/qwen3.8-27b-fp8
+            - --docker-config=/auth/.dockerconfigjson
+            - --ca-file=/ca/ca.crt
+          env:
+            - name: MODEL_REF
+              # Tag = first 12 chars of the upstream commit; Harbor tag immutability
+              # (Chapter 3) guarantees it can never point at different bytes.
+              value: harbor.enclave.internal/models/qwen3.8-27b-fp8:017b9c7af6b5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: "2", memory: 2Gi}
+            limits: {memory: 4Gi}
+          volumeMounts:
+            - {name: models, mountPath: /models}
+            - {name: oci-pull, mountPath: /scripts, readOnly: true}
+            - {name: harbor-auth, mountPath: /auth, readOnly: true}
+            - {name: enclave-ca, mountPath: /ca, readOnly: true}
+      containers:
+        - name: vllm
+          image: docker.io/vllm/vllm-openai:v0.32.0
+          args:
+            - --model=/models/qwen3.8-27b-fp8
+            - --served-model-name=qwen3.8-27b
+            - --host=0.0.0.0
+            - --port=8000
+            - --tensor-parallel-size=1
+            - --kv-cache-dtype=fp8
+            # The model supports 262,144 tokens; one L40S cannot hold that much
+            # KV cache next to the weights. Cap it (see this chapter's war story).
+            - --max-model-len=32768
+            - --gpu-memory-utilization=0.90
+            - --max-num-seqs=64
+            - --enable-prefix-caching
+          env:
+            # Never phone home. vLLM sends usage statistics to stats.vllm.ai
+            # unless told not to; the egress baseline would drop it anyway, but
+            # a sovereign system should not even try.
+            - {name: VLLM_NO_USAGE_STATS, value: "1"}
+            - {name: DO_NOT_TRACK, value: "1"}
+            - {name: HF_HUB_OFFLINE, value: "1"}
+            - {name: TRANSFORMERS_OFFLINE, value: "1"}
+            # Defence in depth: even inside the cluster, the gateway must present a key.
+            - name: VLLM_API_KEY
+              valueFrom:
+                secretKeyRef: {name: vllm-api-key, key: key}
+          ports:
+            - {name: http, containerPort: 8000}
+          resources:
+            requests: {cpu: "8", memory: 48Gi, nvidia.com/gpu: "1"}
+            limits: {memory: 64Gi, nvidia.com/gpu: "1"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          # Loading 31 GB from Ceph and compiling CUDA graphs takes minutes.
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            failureThreshold: 90
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 20
+            failureThreshold: 6
+          volumeMounts:
+            - {name: models, mountPath: /models, readOnly: true}
+            - {name: shm, mountPath: /dev/shm}
+            - {name: cache, mountPath: /root/.cache}
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: model-cache-qwen3-8-27b
+        - name: oci-pull
+          configMap:
+            name: oci-pull
+        - name: harbor-auth
+          secret:
+            secretName: harbor-models-pull
+        - name: enclave-ca
+          configMap:
+            name: enclave-ca
+        - name: shm
+          emptyDir: {medium: Memory, sizeLimit: 8Gi}
+        - name: cache
+          emptyDir: {sizeLimit: 20Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-qwen3-8-27b
+  labels:
+    app.kubernetes.io/name: vllm-qwen3-8-27b
+    app.kubernetes.io/component: model-server
+spec:
+  selector:
+    app.kubernetes.io/name: vllm-qwen3-8-27b
+  ports:
+    - {name: http, port: 8000, targetPort: http}

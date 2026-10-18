@@ -1,0 +1,135 @@
+# =============================================================================
+# rag-api.yaml — the RAG service and the network rules around the RAG stack
+# Book: Sovereign AI Stacks, Chapter 8
+# Image built from apps/rag (Dockerfile) by the companion repo's CI.
+# Secrets: rag-api-gateway-key (from provision_keys.py), tei-api-key, qdrant-api-key
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-api
+  namespace: rag
+  labels: {app.kubernetes.io/name: rag-api}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: rag-api}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: rag-api}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: api
+          image: ghcr.io/prosperityai/sovereign-rag-api:1.0.0
+          env:
+            - {name: OIDC_ISSUER, value: "https://sso.enclave.internal/realms/government"}
+            # Fetch signing keys inside the cluster; the issuer string still
+            # names the public hostname that Keycloak puts in every token.
+            - {name: OIDC_JWKS_URL, value: "http://sso-service.identity.svc:8080/realms/government/protocol/openid-connect/certs"}
+            - {name: OIDC_AUDIENCE, value: rag-api}
+            - {name: QDRANT_URL, value: "http://qdrant.rag.svc:6333"}
+            - {name: TEI_EMBED_URL, value: "http://tei-bge-m3.rag.svc:8080"}
+            - {name: TEI_RERANK_URL, value: "http://tei-reranker.rag.svc:8080"}
+            - {name: GATEWAY_URL, value: "http://litellm.ai-gateway.svc:4000"}
+            - {name: CHAT_MODEL, value: qwen3.8-27b}
+            - {name: SSL_CERT_FILE, value: /etc/enclave-ca/ca.crt}
+            - name: GATEWAY_KEY
+              valueFrom: {secretKeyRef: {name: rag-api-gateway-key, key: key}}
+            - name: TEI_API_KEY
+              valueFrom: {secretKeyRef: {name: tei-api-key, key: key}}
+            - name: QDRANT_API_KEY
+              valueFrom: {secretKeyRef: {name: qdrant-api-key, key: api-key}}
+          ports:
+            - {name: http, containerPort: 8000}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 500m, memory: 512Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: enclave-ca, mountPath: /etc/enclave-ca, readOnly: true}
+      volumes:
+        - name: enclave-ca
+          configMap: {name: enclave-ca}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rag-api
+  namespace: rag
+spec:
+  selector: {app.kubernetes.io/name: rag-api}
+  ports:
+    - {name: http, port: 8000, targetPort: http}
+---
+# Tenant applications call the RAG API from their own namespaces, labelled
+# with their tenant; the eval harness calls it from evals.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: rag-api-ingress
+  namespace: rag
+spec:
+  endpointSelector:
+    matchLabels: {app.kubernetes.io/name: rag-api}
+  ingress:
+    - fromEndpoints:
+        - matchExpressions:
+            - {key: "k8s:io.cilium.k8s.namespace.labels.sovereign-ai/tenant", operator: Exists}
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: evals}
+      toPorts:
+        - ports:
+            - {port: "8000", protocol: TCP}
+---
+# Qdrant holds every tenant's documents: only the RAG API, ingestion jobs and
+# Qdrant's own peers may talk to it.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: qdrant-ingress
+  namespace: rag
+spec:
+  endpointSelector:
+    matchLabels: {app.kubernetes.io/name: qdrant}
+  ingress:
+    - fromEndpoints:
+        - matchLabels: {app.kubernetes.io/name: rag-api}
+        - matchLabels: {app.kubernetes.io/name: rag-ingest}
+        - matchLabels: {app.kubernetes.io/name: qdrant}
+      toPorts:
+        - ports:
+            - {port: "6333", protocol: TCP}
+            - {port: "6334", protocol: TCP}
+            - {port: "6335", protocol: TCP}
+---
+# Embedding and reranking: the RAG API, ingestion, and the gateway (which
+# exposes bge-m3 to Open WebUI's document chat).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: tei-ingress
+  namespace: rag
+spec:
+  endpointSelector:
+    matchExpressions:
+      - {key: app.kubernetes.io/component, operator: In, values: [embeddings, reranker]}
+  ingress:
+    - fromEndpoints:
+        - matchLabels: {app.kubernetes.io/name: rag-api}
+        - matchLabels: {app.kubernetes.io/name: rag-ingest}
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: ai-gateway}
+      toPorts:
+        - ports:
+            - {port: "8080", protocol: TCP}

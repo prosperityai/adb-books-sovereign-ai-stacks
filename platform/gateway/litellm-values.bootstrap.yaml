@@ -1,0 +1,9 @@
+# Overlay for the first install (Chapter 6), before the audit sink (Chapter 10)
+# and Langfuse (Chapter 9) exist. Remove it from the helm command once both run.
+#   helm upgrade --install litellm ... -f litellm-values.yaml -f litellm-values.bootstrap.yaml
+environmentSecrets:
+  - litellm-backends
+proxy_config:
+  litellm_settings:
+    success_callback: []
+    failure_callback: []

@@ -66,6 +66,15 @@ for project in mirror models charts apps; do
   esac
 done
 
+# 4b. Tag immutability on models and apps: once a tag is pushed it can never be
+#     re-pointed at different bytes, so a tag in a manifest is as good as a digest.
+for project in models apps; do
+  curl -fsS "${AUTH[@]}" -H 'Content-Type: application/json' -X POST "$API/projects/$project/immutabletagrules" -d '{
+    "tag_selectors":[{"kind":"doublestar","decoration":"matches","pattern":"**"}],
+    "scope_selectors":{"repository":[{"kind":"doublestar","decoration":"repoMatches","pattern":"**"}]}}' \
+    && echo "tag immutability enabled on $project"
+done
+
 # 5. Robot accounts: one that can push (import station only) and one that can
 #    only pull (every cluster node). Separate credentials, separate blast radius.
 robot() {

@@ -48,6 +48,20 @@ hubble:
     serviceMonitor:
       enabled: false   # switched on in Chapter 9 once the Prometheus CRDs exist
 
+# Users reach the chat UIs and Keycloak through Cilium's built-in ingress
+# controller (Envoy), exposed on an enclave IP announced over ARP (L2).
+# No separate ingress controller or load balancer appliance to carry in.
+ingressController:
+  enabled: true
+  default: true
+  loadbalancerMode: shared
+l2announcements:
+  enabled: true
+# L2 announcements renew a lease per service; raise API client limits to match.
+k8sClientRateLimit:
+  qps: 50
+  burst: 100
+
 operator:
   replicas: 2
   prometheus:

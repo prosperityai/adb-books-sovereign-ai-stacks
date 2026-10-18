@@ -1,0 +1,19 @@
+# Run: kyverno test platform/policies/tests
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: sovereign-platform-policies
+policies:
+  - ../deny-world-egress.yaml
+  - ../no-external-services.yaml
+  - ../require-limits.yaml
+resources:
+  - resources.yaml
+results:
+  - {policy: deny-world-egress, rule: no-world-egress, kind: CiliumNetworkPolicy, resources: [good-gateway-egress], result: pass}
+  - {policy: deny-world-egress, rule: no-world-egress, kind: CiliumNetworkPolicy, resources: [bad-world, bad-fqdn-in-specs], result: fail}
+  - {policy: deny-world-egress, rule: no-world-egress, kind: CiliumClusterwideNetworkPolicy, resources: [bad-cidr], result: fail}
+  - {policy: no-external-services, rule: cluster-ip-only, kind: Service, resources: [good-clusterip], result: pass}
+  - {policy: no-external-services, rule: cluster-ip-only, kind: Service, resources: [bad-nodeport], result: fail}
+  - {policy: require-limits, rule: memory-limits, kind: Pod, resources: [good-limits], result: pass}
+  - {policy: require-limits, rule: memory-limits, kind: Pod, resources: [bad-no-limits], result: fail}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gpu_sizer.py — size GPU servers for LLM inference from first principles.
+r"""gpu_sizer.py — size GPU servers for LLM inference from first principles.
 
 Book: Sovereign AI Stacks, Chapter 2
 Requires: Python 3.13, PyYAML 6.0
@@ -12,10 +12,10 @@ The calculator answers three procurement questions:
 3. What is the memory-bandwidth ceiling on aggregate decode throughput?
 
 Examples:
-    python gpu_sizer.py --model qwen3.8-27b --precision fp8 --kv-dtype fp8 \\
+    python gpu_sizer.py --model qwen3.8-27b --precision fp8 --kv-dtype fp8 \
         --gpu l40s --context 8192 --concurrency 32
 
-    python gpu_sizer.py --model gemma-4-31b --precision bf16 --gpu l40s \\
+    python gpu_sizer.py --model gemma-4-31b --precision bf16 --gpu l40s \
         --context 8192 --users 400 --requests-per-hour 6 --avg-request-seconds 25
 """
 

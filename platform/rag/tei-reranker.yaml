@@ -1,0 +1,110 @@
+# =============================================================================
+# Text Embeddings Inference 1.9 serving BAAI/bge-reranker-v2-m3 (multilingual reranker)
+# Book: Sovereign AI Stacks, Chapter 8
+#
+# Reranks the 40 ACL-filtered candidates down to the best 6. CPU is adequate
+# for 40 short passages per query; move it to a GPU node if p95 rerank latency
+# exceeds your budget (Chapter 9 dashboards show it).
+# Secrets: tei-api-key (key "key"), harbor-models-pull; ConfigMaps: enclave-ca, oci-pull.
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-cache-bge-reranker
+  namespace: rag
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: ceph-block
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tei-reranker
+  namespace: rag
+  labels: {app.kubernetes.io/name: tei-reranker, app.kubernetes.io/component: reranker}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: tei-reranker}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: tei-reranker, app.kubernetes.io/component: reranker}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: model-fetch
+          image: docker.io/library/python:3.13-slim-trixie
+          command: ["python3", "/scripts/oci_pull.py"]
+          args:
+            - harbor.enclave.internal/models/bge-reranker-v2-m3:953dc6f6f85a
+            - /models/bge-reranker-v2-m3
+            - --docker-config=/auth/.dockerconfigjson
+            - --ca-file=/ca/ca.crt
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}
+          resources:
+            requests: {cpu: 500m, memory: 512Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: models, mountPath: /models}
+            - {name: oci-pull, mountPath: /scripts, readOnly: true}
+            - {name: harbor-auth, mountPath: /auth, readOnly: true}
+            - {name: enclave-ca, mountPath: /ca, readOnly: true}
+      containers:
+        - name: tei
+          image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+          args:
+            - --model-id=/models/bge-reranker-v2-m3
+            - --port=8080
+            - --max-client-batch-size=64
+            - --auto-truncate
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef: {name: tei-api-key, key: key}
+            - {name: HF_HUB_OFFLINE, value: "1"}
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            failureThreshold: 60
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}
+          resources:
+            requests: {cpu: "4", memory: 6Gi}
+            limits: {memory: 8Gi}
+          volumeMounts:
+            - {name: models, mountPath: /models, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: models
+          persistentVolumeClaim: {claimName: model-cache-bge-reranker}
+        - name: oci-pull
+          configMap: {name: oci-pull}
+        - name: harbor-auth
+          secret: {secretName: harbor-models-pull}
+        - name: enclave-ca
+          configMap: {name: enclave-ca}
+        - name: tmp
+          emptyDir: {sizeLimit: 2Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tei-reranker
+  namespace: rag
+spec:
+  selector: {app.kubernetes.io/name: tei-reranker}
+  ports:
+    - {name: http, port: 8080, targetPort: http}

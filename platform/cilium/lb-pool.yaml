@@ -1,0 +1,24 @@
+# Enclave addresses for LoadBalancer services (the shared Cilium ingress),
+# announced on the node LAN by ARP from the control-plane nodes.
+# Book: Sovereign AI Stacks, Chapter 7. Replace the range with yours.
+apiVersion: cilium.io/v2
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: enclave-ingress
+spec:
+  blocks:
+    - start: 10.20.10.100
+      stop: 10.20.10.120
+---
+apiVersion: cilium.io/v2alpha1
+kind: CiliumL2AnnouncementPolicy
+metadata:
+  name: enclave-ingress
+spec:
+  loadBalancerIPs: true
+  interfaces:
+    - ^eth[0-9]+
+  nodeSelector:
+    matchExpressions:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists

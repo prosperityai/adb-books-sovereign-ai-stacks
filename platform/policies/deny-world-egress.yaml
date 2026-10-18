@@ -1,0 +1,53 @@
+# =============================================================================
+# deny-world-egress — no network policy may open a path out of the enclave
+# Book: Sovereign AI Stacks, Chapter 7
+#
+# Cilium policies are additive: Chapter 4's baseline denies the internet only
+# until someone writes a policy that allows it. This rule makes that
+# impossible to admit, whoever writes it.
+# =============================================================================
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: deny-world-egress
+  annotations:
+    policies.kyverno.io/title: Deny egress to the world
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Rejects CiliumNetworkPolicy and CiliumClusterwideNetworkPolicy objects that
+      allow egress to the world or all entities, to any FQDN, or to 0.0.0.0/0.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: no-world-egress
+      match:
+        any:
+          - resources:
+              kinds:
+                - cilium.io/v2/CiliumNetworkPolicy
+                - cilium.io/v2/CiliumClusterwideNetworkPolicy
+      validate:
+        cel:
+          variables:
+            # A policy carries its rules in spec, in specs[], or both.
+            - name: specs
+              expression: >-
+                (has(object.spec) ? [object.spec] : []) +
+                (has(object.specs) ? object.specs : [])
+            - name: egress
+              expression: >-
+                variables.specs.map(s, has(s.egress) ? s.egress : []).flatten()
+          expressions:
+            - expression: >-
+                !variables.egress.exists(e, has(e.toEntities) &&
+                  e.toEntities.exists(x, x == 'world' || x == 'all'))
+              message: "egress to the 'world' or 'all' entity is forbidden in the enclave"
+            - expression: >-
+                !variables.egress.exists(e, has(e.toFQDNs))
+              message: "toFQDNs egress is forbidden: the enclave has no external names to reach"
+            - expression: >-
+                !variables.egress.exists(e,
+                  (has(e.toCIDR) && e.toCIDR.exists(c, c == '0.0.0.0/0' || c == '::/0')) ||
+                  (has(e.toCIDRSet) && e.toCIDRSet.exists(c, has(c.cidr) && (c.cidr == '0.0.0.0/0' || c.cidr == '::/0'))))
+              message: "egress to 0.0.0.0/0 or ::/0 is forbidden"

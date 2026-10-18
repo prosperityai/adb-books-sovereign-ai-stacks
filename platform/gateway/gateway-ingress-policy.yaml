@@ -1,0 +1,22 @@
+# Who may call the AI gateway: the chat UIs, the RAG service, the eval harness
+# and Prometheus. Applications in other namespaces must be added explicitly.
+# Book: Sovereign AI Stacks, Chapter 6
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: litellm-ingress
+  namespace: ai-gateway
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: litellm
+  ingress:
+    - fromEndpoints:
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: chat-ui}
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: rag}
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: evals}
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: monitoring}
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: ai-gateway}
+      toPorts:
+        - ports:
+            - {port: "4000", protocol: TCP}

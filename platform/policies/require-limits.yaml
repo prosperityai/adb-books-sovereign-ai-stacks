@@ -1,0 +1,33 @@
+# =============================================================================
+# require-limits — every container declares memory requests and limits
+# Book: Sovereign AI Stacks, Chapter 7
+#
+# On a shared GPU node, a pod without a memory limit can push the node into
+# OOM and take a model server with it. In tenant namespaces, require limits.
+# =============================================================================
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-limits
+  annotations:
+    policies.kyverno.io/title: Require memory requests and limits
+    policies.kyverno.io/severity: medium
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: memory-limits
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [inference, ai-gateway, chat-ui, rag, evals]
+      validate:
+        cel:
+          expressions:
+            - expression: >-
+                object.spec.containers.all(c,
+                  has(c.resources) &&
+                  has(c.resources.limits) && 'memory' in c.resources.limits &&
+                  has(c.resources.requests) && 'memory' in c.resources.requests)
+              message: "every container needs resources.requests.memory and resources.limits.memory"

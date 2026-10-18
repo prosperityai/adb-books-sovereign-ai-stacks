@@ -31,7 +31,9 @@ components:
           - ../platform/gpu/runtimeclass.yaml
           - ../platform/cilium/enclave-egress-baseline.yaml
           - ../platform/base/egress-test-pod.yaml
+          - ../platform/cilium/lb-pool.yaml
           - ../platform/base/egress-test-pod.yaml
+          - ../platform/cilium/lb-pool.yaml
     charts:
       - name: cilium
         url: https://helm.cilium.io/
@@ -70,9 +72,8 @@ components:
     manifests:
       - name: inference
         namespace: inference
-        files:
-          - ../platform/inference/vllm-qwen3-8-27b.yaml
-          - ../platform/inference/vllm-gpt-oss-120b.yaml
+        kustomizations:
+          - ../platform/inference
       - name: embeddings
         namespace: rag
         files:
@@ -104,6 +105,8 @@ components:
         namespace: ai-gateway
         files:
           - ../platform/gateway/postgres-cluster.yaml
+          - ../platform/gateway/gateway-ingress-policy.yaml
+          - ../platform/chat-ui/ingress-and-policy.yaml
 
   # --- Chapter 7: identity and policy ---------------------------------------
   - name: identity
@@ -118,7 +121,14 @@ components:
       - name: keycloak
         namespace: identity
         files:
+          - ../platform/identity/keycloak-db.yaml
           - ../platform/identity/keycloak.yaml
+          - ../platform/identity/realm-government.yaml
+      - name: platform-policies
+        files:
+          - ../platform/policies/deny-world-egress.yaml
+          - ../platform/policies/no-external-services.yaml
+          - ../platform/policies/require-limits.yaml
     charts:
       - name: kyverno
         url: https://kyverno.github.io/kyverno/
@@ -142,6 +152,7 @@ components:
         namespace: rag
         files:
           - ../platform/rag/rag-api.yaml
+          - ../platform/rag/ingest-job.yaml
 
   # --- Chapter 9: observability ---------------------------------------------
   - name: observability

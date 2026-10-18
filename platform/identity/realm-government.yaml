@@ -1,0 +1,255 @@
+# =============================================================================
+# realm-government.yaml — the "government" realm: policies, tenant groups,
+# one OIDC client per tenant chat UI
+# Book: Sovereign AI Stacks, Chapter 7
+#
+# Client secrets are never written here: the operator substitutes ${...}
+# placeholders from Kubernetes Secrets at import time.
+#   kubectl -n identity create secret generic realm-client-secrets \
+#     --from-literal=chat-ministry-health="$(openssl rand -hex 32)" \
+#     --from-literal=chat-revenue-authority="$(openssl rand -hex 32)" \
+#     --from-literal=rag-ministry-health="$(openssl rand -hex 32)"
+# The same values go into each tenant's chat-<tenant>-oidc Secret in chat-ui.
+# =============================================================================
+apiVersion: k8s.keycloak.org/v2beta1
+kind: KeycloakRealmImport
+metadata:
+  name: government
+  namespace: identity
+spec:
+  keycloakCRName: sso
+  placeholders:
+    CHAT_MINISTRY_HEALTH_SECRET:
+      secret: {name: realm-client-secrets, key: chat-ministry-health}
+    CHAT_REVENUE_AUTHORITY_SECRET:
+      secret: {name: realm-client-secrets, key: chat-revenue-authority}
+    RAG_MINISTRY_HEALTH_SECRET:
+      secret: {name: realm-client-secrets, key: rag-ministry-health}
+  realm:
+    realm: government
+    displayName: Government AI Platform
+    enabled: true
+    sslRequired: all
+    # --- account security --------------------------------------------------
+    bruteForceProtected: true
+    failureFactor: 5
+    permanentLockout: false
+    maxFailureWaitSeconds: 900
+    passwordPolicy: "length(14) and notUsername and notEmail and passwordHistory(5)"
+    otpPolicyType: totp
+    otpPolicyAlgorithm: HmacSHA256
+    # Every user enrols an authenticator app on first login.
+    requiredActions:
+      - alias: CONFIGURE_TOTP
+        name: Configure OTP
+        providerId: CONFIGURE_TOTP
+        enabled: true
+        defaultAction: true
+        priority: 10
+    # --- sessions and tokens ----------------------------------------------
+    accessTokenLifespan: 300          # 5 minutes
+    ssoSessionIdleTimeout: 1800       # 30 minutes idle
+    ssoSessionMaxLifespan: 36000      # 10 hours: one working day
+    # --- audit: login and admin events, kept 90 days ----------------------
+    eventsEnabled: true
+    eventsExpiration: 7776000
+    adminEventsEnabled: true
+    adminEventsDetailsEnabled: true
+    # --- tenancy -----------------------------------------------------------
+    # Each tenant's chat UI is its own client with its own roles. A user can
+    # sign in to a tenant's UI only if a group grants that client's ai-user role.
+    roles:
+      client:
+        chat-ministry-health:
+          - {name: ai-user}
+          - {name: ai-admin}
+        chat-revenue-authority:
+          - {name: ai-user}
+          - {name: ai-admin}
+    groups:
+      - name: ministry-health
+        attributes: {tenant: [ministry-health]}
+        clientRoles: {chat-ministry-health: [ai-user]}
+      - name: ministry-health-admins
+        attributes: {tenant: [ministry-health]}
+        clientRoles: {chat-ministry-health: [ai-user, ai-admin]}
+      - name: revenue-authority
+        attributes: {tenant: [revenue-authority]}
+        clientRoles: {chat-revenue-authority: [ai-user]}
+      - name: revenue-authority-admins
+        attributes: {tenant: [revenue-authority]}
+        clientRoles: {chat-revenue-authority: [ai-user, ai-admin]}
+    clients:
+      - clientId: chat-ministry-health
+        name: AI Assistant - Ministry of Health
+        protocol: openid-connect
+        publicClient: false
+        secret: ${CHAT_MINISTRY_HEALTH_SECRET}
+        standardFlowEnabled: true
+        implicitFlowEnabled: false
+        directAccessGrantsEnabled: false
+        serviceAccountsEnabled: false
+        redirectUris:
+          - https://chat-ministry-health.enclave.internal/oauth/oidc/callback
+        webOrigins:
+          - https://chat-ministry-health.enclave.internal
+        attributes:
+          pkce.code.challenge.method: S256
+          post.logout.redirect.uris: https://chat-ministry-health.enclave.internal/
+        protocolMappers:
+          # Put ONLY this client's roles into a flat "roles" claim for Open WebUI.
+          - name: client-roles
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-client-role-mapper
+            config:
+              usermodel.clientRoleMapping.clientId: chat-ministry-health
+              claim.name: roles
+              multivalued: "true"
+              jsonType.label: String
+              id.token.claim: "true"
+              access.token.claim: "true"
+              userinfo.token.claim: "true"
+          # Audience restriction: tokens for this client name this client.
+          - name: audience
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: chat-ministry-health
+              access.token.claim: "true"
+              id.token.claim: "false"
+          # Claims the RAG API (Chapter 8) needs: audience, tenant, clearance, groups.
+          - name: rag-audience
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.custom.audience: rag-api
+              access.token.claim: "true"
+              id.token.claim: "false"
+          - name: tenant
+            protocol: openid-connect
+            protocolMapper: oidc-hardcoded-claim-mapper
+            config:
+              claim.name: tenant
+              claim.value: ministry-health
+              jsonType.label: String
+              access.token.claim: "true"
+              id.token.claim: "true"
+          - name: clearance
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-attribute-mapper
+            config:
+              user.attribute: clearance
+              claim.name: clearance
+              jsonType.label: String
+              access.token.claim: "true"
+              id.token.claim: "true"
+          - name: groups
+            protocol: openid-connect
+            protocolMapper: oidc-group-membership-mapper
+            config:
+              claim.name: groups
+              full.path: "false"
+              access.token.claim: "true"
+              id.token.claim: "true"
+      - clientId: chat-revenue-authority
+        name: AI Assistant - Revenue Authority
+        protocol: openid-connect
+        publicClient: false
+        secret: ${CHAT_REVENUE_AUTHORITY_SECRET}
+        standardFlowEnabled: true
+        implicitFlowEnabled: false
+        directAccessGrantsEnabled: false
+        serviceAccountsEnabled: false
+        redirectUris:
+          - https://chat-revenue-authority.enclave.internal/oauth/oidc/callback
+        webOrigins:
+          - https://chat-revenue-authority.enclave.internal
+        attributes:
+          pkce.code.challenge.method: S256
+          post.logout.redirect.uris: https://chat-revenue-authority.enclave.internal/
+        protocolMappers:
+          - name: client-roles
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-client-role-mapper
+            config:
+              usermodel.clientRoleMapping.clientId: chat-revenue-authority
+              claim.name: roles
+              multivalued: "true"
+              jsonType.label: String
+              id.token.claim: "true"
+              access.token.claim: "true"
+              userinfo.token.claim: "true"
+          - name: audience
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: chat-revenue-authority
+              access.token.claim: "true"
+              id.token.claim: "false"
+          # Claims the RAG API (Chapter 8) needs: audience, tenant, clearance, groups.
+          - name: rag-audience
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.custom.audience: rag-api
+              access.token.claim: "true"
+              id.token.claim: "false"
+          - name: tenant
+            protocol: openid-connect
+            protocolMapper: oidc-hardcoded-claim-mapper
+            config:
+              claim.name: tenant
+              claim.value: revenue-authority
+              jsonType.label: String
+              access.token.claim: "true"
+              id.token.claim: "true"
+          - name: clearance
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-attribute-mapper
+            config:
+              user.attribute: clearance
+              claim.name: clearance
+              jsonType.label: String
+              access.token.claim: "true"
+              id.token.claim: "true"
+          - name: groups
+            protocol: openid-connect
+            protocolMapper: oidc-group-membership-mapper
+            config:
+              claim.name: groups
+              full.path: "false"
+              access.token.claim: "true"
+              id.token.claim: "true"
+      # --- service clients for tenant applications calling the RAG API -------
+      # Client-credentials only; the tenant and clearance are fixed per client.
+      - clientId: rag-ministry-health
+        name: RAG API access - Ministry of Health applications
+        protocol: openid-connect
+        publicClient: false
+        secret: ${RAG_MINISTRY_HEALTH_SECRET}
+        standardFlowEnabled: false
+        directAccessGrantsEnabled: false
+        serviceAccountsEnabled: true
+        protocolMappers:
+          - name: rag-audience
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.custom.audience: rag-api
+              access.token.claim: "true"
+          - name: tenant
+            protocol: openid-connect
+            protocolMapper: oidc-hardcoded-claim-mapper
+            config:
+              claim.name: tenant
+              claim.value: ministry-health
+              jsonType.label: String
+              access.token.claim: "true"
+          - name: clearance
+            protocol: openid-connect
+            protocolMapper: oidc-hardcoded-claim-mapper
+            config:
+              claim.name: clearance
+              claim.value: restricted
+              jsonType.label: String
+              access.token.claim: "true"

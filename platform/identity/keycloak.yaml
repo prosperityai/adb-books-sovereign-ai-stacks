@@ -1,0 +1,98 @@
+# =============================================================================
+# keycloak.yaml — the enclave's identity provider (Keycloak 26.8.1, operator v2beta1)
+# Book: Sovereign AI Stacks, Chapter 7
+#
+# Secrets expected:
+#   keycloak-db-app          created by CloudNativePG
+#   keycloak-bootstrap-admin keys "username" and "password" (first start only)
+#   sso-tls                  enclave-CA certificate for sso.enclave.internal
+# =============================================================================
+apiVersion: k8s.keycloak.org/v2beta1
+kind: Keycloak
+metadata:
+  name: sso
+  namespace: identity
+spec:
+  instances: 2
+  image: quay.io/keycloak/keycloak:26.8.1
+  db:
+    vendor: postgres
+    host: keycloak-db-rw.identity.svc
+    port: 5432
+    database: keycloak
+    usernameSecret: {name: keycloak-db-app, key: username}
+    passwordSecret: {name: keycloak-db-app, key: password}
+  # TLS terminates at the Cilium ingress with the enclave certificate; pod
+  # traffic behind it is WireGuard-encrypted node to node (Chapter 4).
+  http:
+    httpEnabled: true
+  hostname:
+    hostname: https://sso.enclave.internal
+    strict: true
+  proxy:
+    headers: xforwarded
+  bootstrapAdmin:
+    user:
+      secret: keycloak-bootstrap-admin
+  # We write our own Ingress and Cilium policy below.
+  ingress:
+    enabled: false
+  networkPolicy:
+    enabled: false
+  additionalOptions:
+    - name: metrics-enabled
+      value: "true"
+    - name: event-metrics-user-enabled
+      value: "true"
+    # Keycloak checks no external service, but say so explicitly.
+    - name: log-console-output
+      value: json
+  resources:
+    requests: {cpu: "1", memory: 2Gi}
+    limits: {memory: 3Gi}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sso
+  namespace: identity
+spec:
+  ingressClassName: cilium
+  tls:
+    - hosts: [sso.enclave.internal]
+      secretName: sso-tls
+  rules:
+    - host: sso.enclave.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sso-service
+                port:
+                  number: 8080
+---
+# Browsers arrive through the Cilium ingress; the chat UIs call the token
+# endpoint server-side; Prometheus scrapes metrics. Nothing else.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: keycloak-ingress
+  namespace: identity
+spec:
+  endpointSelector:
+    matchLabels:
+      app: keycloak
+  ingress:
+    - fromEntities: [ingress]
+    - fromEndpoints:
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: chat-ui}
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: monitoring}
+        - matchLabels: {app: keycloak}            # cluster cache between instances
+      toPorts:
+        - ports:
+            - {port: "8080", protocol: TCP}
+            - {port: "9000", protocol: TCP}       # management: health and metrics
+            - {port: "7800", protocol: TCP}       # JGroups clustering
+            - {port: "57800", protocol: TCP}

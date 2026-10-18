@@ -1,0 +1,35 @@
+# =============================================================================
+# no-external-services — only the shared ingress may face the user network
+# Book: Sovereign AI Stacks, Chapter 7
+#
+# A NodePort or LoadBalancer Service on a model server would bypass the
+# gateway, its keys, limits and audit. Only Cilium's own ingress (kube-system)
+# may create a LoadBalancer.
+# =============================================================================
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: no-external-services
+  annotations:
+    policies.kyverno.io/title: No NodePort or LoadBalancer Services outside kube-system
+    policies.kyverno.io/severity: high
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: cluster-ip-only
+      match:
+        any:
+          - resources:
+              kinds: [Service]
+      exclude:
+        any:
+          - resources:
+              namespaces: [kube-system]
+      validate:
+        cel:
+          expressions:
+            - expression: >-
+                !has(object.spec.type) ||
+                object.spec.type == 'ClusterIP' || object.spec.type == 'ExternalName'
+              message: "Services must be ClusterIP; expose workloads through the cilium Ingress"

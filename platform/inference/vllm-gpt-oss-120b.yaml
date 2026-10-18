@@ -1,0 +1,165 @@
+# =============================================================================
+# gpt-oss-120b (native MXFP4) on vLLM 0.32.0 — the analyst-tier model
+# Book: Sovereign AI Stacks, Chapter 5
+# Sizing (Chapter 2): 2 x 80 GB GPUs per replica (TP=2) for 16k-token
+# conversations at 64+ concurrency; 60.8 GiB of weights per replica.
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-cache-gpt-oss-120b
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: ceph-block
+  resources:
+    requests:
+      storage: 90Gi          # 65.25 GB of weights plus headroom for an upgrade swap
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-gpt-oss-120b
+  labels:
+    app.kubernetes.io/name: vllm-gpt-oss-120b
+    app.kubernetes.io/component: model-server
+spec:
+  replicas: 1
+  # A replacement pod needs the same GPU and the same RWO volume; never run two.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vllm-gpt-oss-120b
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vllm-gpt-oss-120b
+        app.kubernetes.io/component: model-server
+        sovereign-ai/model: gpt-oss-120b
+    spec:
+      serviceAccountName: vllm
+      runtimeClassName: nvidia
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      # GPU Feature Discovery labels nodes with per-GPU memory in MiB.
+      # 65 GB of weights split over two cards needs 80 GB-class GPUs.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.memory
+                    operator: Gt
+                    values: ["70000"]
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Fetch the pinned model from Harbor and verify every byte (oci_pull.py).
+        - name: model-fetch
+          image: docker.io/vllm/vllm-openai:v0.32.0
+          command: ["python3", "/scripts/oci_pull.py"]
+          args:
+            - "$(MODEL_REF)"
+            - /models/gpt-oss-120b
+            - --docker-config=/auth/.dockerconfigjson
+            - --ca-file=/ca/ca.crt
+          env:
+            - name: MODEL_REF
+              # Tag = first 12 chars of the upstream commit; Harbor tag immutability
+              # (Chapter 3) guarantees it can never point at different bytes.
+              value: harbor.enclave.internal/models/gpt-oss-120b:b5c939de8f75
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: "2", memory: 2Gi}
+            limits: {memory: 4Gi}
+          volumeMounts:
+            - {name: models, mountPath: /models}
+            - {name: oci-pull, mountPath: /scripts, readOnly: true}
+            - {name: harbor-auth, mountPath: /auth, readOnly: true}
+            - {name: enclave-ca, mountPath: /ca, readOnly: true}
+      containers:
+        - name: vllm
+          image: docker.io/vllm/vllm-openai:v0.32.0
+          args:
+            - --model=/models/gpt-oss-120b
+            - --served-model-name=gpt-oss-120b
+            - --host=0.0.0.0
+            - --port=8000
+            - --tensor-parallel-size=2
+            - --max-model-len=65536
+            - --gpu-memory-utilization=0.90
+            - --max-num-seqs=128
+            - --enable-prefix-caching
+          env:
+            # Never phone home. vLLM sends usage statistics to stats.vllm.ai
+            # unless told not to; the egress baseline would drop it anyway, but
+            # a sovereign system should not even try.
+            - {name: VLLM_NO_USAGE_STATS, value: "1"}
+            - {name: DO_NOT_TRACK, value: "1"}
+            - {name: HF_HUB_OFFLINE, value: "1"}
+            - {name: TRANSFORMERS_OFFLINE, value: "1"}
+            # Defence in depth: even inside the cluster, the gateway must present a key.
+            - name: VLLM_API_KEY
+              valueFrom:
+                secretKeyRef: {name: vllm-api-key, key: key}
+          ports:
+            - {name: http, containerPort: 8000}
+          resources:
+            requests: {cpu: "16", memory: 96Gi, nvidia.com/gpu: "2"}
+            limits: {memory: 128Gi, nvidia.com/gpu: "2"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          # Loading 65 GB from Ceph and compiling CUDA graphs takes minutes.
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            failureThreshold: 90
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 20
+            failureThreshold: 6
+          volumeMounts:
+            - {name: models, mountPath: /models, readOnly: true}
+            - {name: shm, mountPath: /dev/shm}
+            - {name: cache, mountPath: /root/.cache}
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: model-cache-gpt-oss-120b
+        - name: oci-pull
+          configMap:
+            name: oci-pull
+        - name: harbor-auth
+          secret:
+            secretName: harbor-models-pull
+        - name: enclave-ca
+          configMap:
+            name: enclave-ca
+        - name: shm
+          emptyDir: {medium: Memory, sizeLimit: 16Gi}   # NCCL between the two TP ranks
+        - name: cache
+          emptyDir: {sizeLimit: 20Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-gpt-oss-120b
+  labels:
+    app.kubernetes.io/name: vllm-gpt-oss-120b
+    app.kubernetes.io/component: model-server
+spec:
+  selector:
+    app.kubernetes.io/name: vllm-gpt-oss-120b
+  ports:
+    - {name: http, port: 8000, targetPort: http}

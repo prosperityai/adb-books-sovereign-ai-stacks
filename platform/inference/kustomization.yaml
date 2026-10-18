@@ -1,0 +1,18 @@
+# =============================================================================
+# platform/inference — vLLM model servers
+# Book: Sovereign AI Stacks, Chapter 5
+# Render:  kubectl kustomize platform/inference
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: inference
+resources:
+  - common.yaml
+  - vllm-qwen3-8-27b.yaml
+  - vllm-gpt-oss-120b.yaml
+# The puller script ships as a ConfigMap; the content hash in its name makes
+# every script change roll the Deployments that mount it.
+configMapGenerator:
+  - name: oci-pull
+    files:
+      - oci_pull.py

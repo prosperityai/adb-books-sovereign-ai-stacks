@@ -1,0 +1,62 @@
+# =============================================================================
+# postgres-cluster.yaml — the gateway's database (keys, teams, spend, limits)
+# Book: Sovereign AI Stacks, Chapter 6 (backups in Chapter 12)
+# Operator: CloudNativePG 1.30.1   Image: PostgreSQL 18.6
+# =============================================================================
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: litellm-db
+  namespace: ai-gateway
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.6-standard-trixie
+  # Synchronous replication: an acknowledged key creation or spend update
+  # survives the loss of the primary.
+  postgresql:
+    synchronous:
+      method: any
+      number: 1
+    parameters:
+      max_connections: "300"
+      log_statement: ddl
+  bootstrap:
+    initdb:
+      database: litellm
+      owner: litellm
+  storage:
+    storageClass: ceph-block
+    size: 20Gi
+  # Spread replicas across nodes so one node failure never takes quorum.
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+  monitoring:
+    enablePodMonitor: false   # switched on in Chapter 9
+  resources:
+    requests: {cpu: "1", memory: 2Gi}
+    limits: {memory: 4Gi}
+---
+# Only the gateway (and the CNPG operator) may connect to the database.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: litellm-db-ingress
+  namespace: ai-gateway
+spec:
+  endpointSelector:
+    matchLabels:
+      cnpg.io/cluster: litellm-db
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: litellm
+        - matchLabels:
+            cnpg.io/cluster: litellm-db
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: cnpg-system
+      toPorts:
+        - ports:
+            - {port: "5432", protocol: TCP}
+            - {port: "8000", protocol: TCP}

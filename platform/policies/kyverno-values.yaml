@@ -1,0 +1,15 @@
+# Kyverno 1.19.1 (chart 3.9.1). Book: Sovereign AI Stacks, Chapter 7
+# Three replicas of the admission controller: if Kyverno is down, its
+# webhooks fail closed and nothing can be created or changed in the cluster.
+admissionController:
+  replicas: 3
+backgroundController:
+  replicas: 2
+cleanupController:
+  replicas: 2
+reportsController:
+  replicas: 2
+features:
+  # Policy reports feed Chapter 10's evidence pack.
+  policyReports:
+    enabled: true

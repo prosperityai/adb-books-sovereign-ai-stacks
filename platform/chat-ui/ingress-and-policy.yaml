@@ -1,0 +1,53 @@
+# Per-tenant chat UI exposure and egress. Book: Sovereign AI Stacks, Chapter 7
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: chat-ministry-health
+  namespace: chat-ui
+spec:
+  ingressClassName: cilium
+  tls:
+    - hosts: [chat-ministry-health.enclave.internal]
+      secretName: chat-ministry-health-tls
+  rules:
+    - host: chat-ministry-health.enclave.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: chat-ministry-health-open-webui
+                port:
+                  number: 80
+---
+# Users reach the UI only through the ingress.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: chat-ui-ingress
+  namespace: chat-ui
+spec:
+  endpointSelector: {}
+  ingress:
+    - fromEntities: [ingress]
+---
+# Adds to Chapter 1's chat-ui-egress-lockdown (Cilium policies are additive):
+# the UI's server side must reach Keycloak for discovery, token and userinfo.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: chat-ui-egress-identity
+  namespace: chat-ui
+spec:
+  endpointSelector: {}
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: identity
+            app: keycloak
+      toPorts:
+        - ports:
+            - {port: "8080", protocol: TCP}
+    # sso.enclave.internal resolves to the shared ingress address.
+    - toEntities: [ingress]

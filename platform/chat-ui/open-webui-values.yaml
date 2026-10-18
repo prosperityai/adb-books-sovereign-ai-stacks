@@ -1,0 +1,118 @@
+# =============================================================================
+# Open WebUI 0.12.3 (chart 17.0.0) — one release per tenant
+# Book: Sovereign AI Stacks, Chapters 6 and 7
+#   helm upgrade --install chat-ministry-health oci://harbor.enclave.internal/charts/open-webui \
+#     --version 17.0.0 -n chat-ui -f platform/chat-ui/open-webui-values.yaml \
+#     --set-string extraEnvVars[0].value=ministry-health   # see TENANT below
+#
+# Secrets (per tenant, created by provision_keys.py and Chapter 7):
+#   chat-<tenant>-gateway-key   key "key"            LiteLLM virtual key
+#   chat-<tenant>-oidc          key "client-secret"  Keycloak client secret
+#   chat-<tenant>-session       key "secret"         WEBUI_SECRET_KEY
+# =============================================================================
+image:
+  repository: ghcr.io/open-webui/open-webui
+  tag: v0.12.3
+  pullPolicy: IfNotPresent
+
+# No bundled Ollama, no Pipelines server: models come only from the gateway.
+ollama:
+  enabled: false
+pipelines:
+  enabled: false
+websocket:
+  enabled: false
+
+enableOpenaiApi: true
+openaiBaseApiUrl: http://litellm.ai-gateway.svc:4000/v1
+openaiApiKeyExistingSecret: chat-ministry-health-gateway-key
+openaiApiKeyExistingSecretKey: key
+
+persistence:
+  enabled: true
+  size: 10Gi
+  storageClass: ceph-block
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+extraEnvVars:
+  - name: TENANT
+    value: ministry-health
+  # --- sovereignty: nothing leaves the enclave ------------------------------
+  - name: OFFLINE_MODE            # also sets HF_HUB_OFFLINE; no update checks
+    value: "true"
+  - name: ENABLE_VERSION_UPDATE_CHECK
+    value: "false"
+  - name: ENABLE_WEB_SEARCH
+    value: "false"
+  - name: ENABLE_IMAGE_GENERATION
+    value: "false"
+  - name: ENABLE_COMMUNITY_SHARING
+    value: "false"
+  - name: ENABLE_DIRECT_CONNECTIONS   # users may not add their own model endpoints
+    value: "false"
+  - name: ENABLE_OLLAMA_API
+    value: "false"
+  # --- identity: forward the user to the gateway for attribution ------------
+  - name: ENABLE_FORWARD_USER_INFO_HEADERS
+    value: "true"
+  # --- document chat uses the in-enclave embedding model via the gateway ----
+  - name: RAG_EMBEDDING_ENGINE
+    value: openai
+  - name: RAG_OPENAI_API_BASE_URL
+    value: http://litellm.ai-gateway.svc:4000/v1
+  - name: RAG_OPENAI_API_KEY
+    valueFrom:
+      secretKeyRef: {name: chat-ministry-health-gateway-key, key: key}
+  - name: RAG_EMBEDDING_MODEL
+    value: bge-m3
+  # --- sign-in through Keycloak only (Chapter 7) ----------------------------
+  - name: ENABLE_LOGIN_FORM
+    value: "false"
+  - name: ENABLE_SIGNUP
+    value: "false"
+  - name: ENABLE_OAUTH_SIGNUP
+    value: "true"
+  - name: OAUTH_PROVIDER_NAME
+    value: Government SSO
+  - name: OPENID_PROVIDER_URL
+    value: https://sso.enclave.internal/realms/government/.well-known/openid-configuration
+  - name: OAUTH_CLIENT_ID
+    value: chat-ministry-health
+  - name: OAUTH_CLIENT_SECRET
+    valueFrom:
+      secretKeyRef: {name: chat-ministry-health-oidc, key: client-secret}
+  - name: ENABLE_OAUTH_ROLE_MANAGEMENT
+    value: "true"
+  - name: OAUTH_ROLES_CLAIM
+    value: roles
+  - name: OAUTH_ALLOWED_ROLES
+    value: ai-user,ai-admin
+  - name: OAUTH_ADMIN_ROLES
+    value: ai-admin
+  - name: DEFAULT_USER_ROLE
+    value: user
+  - name: WEBUI_SECRET_KEY
+    valueFrom:
+      secretKeyRef: {name: chat-ministry-health-session, key: secret}
+  - name: SSL_CERT_FILE           # trust the enclave CA for the Keycloak endpoint
+    value: /etc/enclave-ca/ca.crt
+
+volumes:
+  - name: enclave-ca
+    configMap:
+      name: enclave-ca
+volumeMounts:
+  container:
+    - name: enclave-ca
+      mountPath: /etc/enclave-ca
+      readOnly: true

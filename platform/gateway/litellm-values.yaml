@@ -1,0 +1,139 @@
+# =============================================================================
+# LiteLLM proxy 1.106.0 (chart litellm-helm 1.106.0) — the single entry point
+# for every model call on the platform
+# Book: Sovereign AI Stacks, Chapter 6 (audit callback: Chapter 10;
+#       tracing callback: Chapter 9)
+#
+# Secrets this release expects (created in Chapter 6):
+#   litellm-master-key   key "masterkey"      admin key for the management API
+#   litellm-db-app       created by CloudNativePG: username/password/host
+#   litellm-backends     VLLM_API_KEY, TEI_API_KEY
+#   litellm-callbacks    GENERIC_LOGGER_HEADERS, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY
+# =============================================================================
+replicaCount: 2
+
+image:
+  repository: ghcr.io/berriai/litellm
+  tag: v1.106.0
+  pullPolicy: IfNotPresent
+
+masterkeySecretName: litellm-master-key
+masterkeySecretKey: masterkey
+
+# Use the CloudNativePG cluster, not the chart's bundled Bitnami Postgres.
+db:
+  useExisting: true
+  deployStandalone: false
+  endpoint: litellm-db-rw.ai-gateway.svc
+  database: litellm
+  url: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)
+  secret:
+    name: litellm-db-app
+    usernameKey: username
+    passwordKey: password
+
+migrationJob:
+  enabled: true
+  hooks:
+    argocd:
+      enabled: false
+    helm:
+      enabled: true
+
+environmentSecrets:
+  - litellm-backends
+  - litellm-callbacks
+
+envVars:
+  # Chapter 10: the audit sink receives every request and response.
+  GENERIC_LOGGER_ENDPOINT: http://audit-sink.ai-gateway.svc:8080/v1/events
+  # Chapter 9: traces go to the IN-ENCLAVE Langfuse. Without LANGFUSE_HOST,
+  # LiteLLM's Langfuse integration defaults to Langfuse's public cloud.
+  LANGFUSE_HOST: http://langfuse-web.monitoring.svc:3000
+  # Never phone home.
+  DO_NOT_TRACK: "true"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+resources:
+  requests: {cpu: "1", memory: 2Gi}
+  limits: {memory: 4Gi}
+
+proxy_config:
+  model_list:
+    # --- chat models (Chapter 5) ------------------------------------------
+    - model_name: qwen3.8-27b
+      litellm_params:
+        model: hosted_vllm/qwen3.8-27b
+        api_base: http://vllm-qwen3-8-27b.inference.svc:8000/v1
+        api_key: os.environ/VLLM_API_KEY
+        timeout: 600
+        stream_timeout: 120
+      model_info:
+        mode: chat
+        max_input_tokens: 32768
+    # Same backend, separate alias for batch jobs. The deployment-level rpm
+    # caps ALL batch traffic together, whatever keys send it.
+    - model_name: qwen3.8-27b-batch
+      litellm_params:
+        model: hosted_vllm/qwen3.8-27b
+        api_base: http://vllm-qwen3-8-27b.inference.svc:8000/v1
+        api_key: os.environ/VLLM_API_KEY
+        rpm: 60
+        timeout: 1800
+      model_info:
+        mode: chat
+        max_input_tokens: 32768
+    - model_name: gpt-oss-120b
+      litellm_params:
+        model: hosted_vllm/gpt-oss-120b
+        api_base: http://vllm-gpt-oss-120b.inference.svc:8000/v1
+        api_key: os.environ/VLLM_API_KEY
+        timeout: 900
+        stream_timeout: 180
+      model_info:
+        mode: chat
+        max_input_tokens: 65536
+    # --- embeddings (Chapter 8) -----------------------------------------------
+    - model_name: bge-m3
+      litellm_params:
+        model: openai/bge-m3
+        api_base: http://tei-bge-m3.rag.svc:8080/v1
+        api_key: os.environ/TEI_API_KEY
+      model_info:
+        mode: embedding
+
+  router_settings:
+    routing_strategy: simple-shuffle
+    num_retries: 1
+    allowed_fails: 3
+    cooldown_time: 30
+    # If the primary model is down, answer with the larger one rather than fail.
+    fallbacks:
+      - qwen3.8-27b: [gpt-oss-120b]
+
+  litellm_settings:
+    drop_params: true
+    request_timeout: 600
+    # Chapter 10 (audit) and Chapter 9 (traces).
+    success_callback: ["generic_api", "langfuse_otel"]
+    failure_callback: ["generic_api", "langfuse_otel"]
+
+  general_settings:
+    master_key: os.environ/PROXY_MASTER_KEY
+    # Open WebUI forwards the signed-in user's e-mail; record it as the end
+    # user on every request (spend, rate limits, audit).
+    user_header_name: X-OpenWebUI-User-Email
+    # Prompts are not stored in LiteLLM's own spend tables; the audit sink
+    # (Chapter 10) stores a redacted copy under its own retention rules.
+    store_prompts_in_spend_logs: false
+    # Fail closed: no database, no requests (keys and limits live there).
+    allow_requests_on_db_unavailable: false

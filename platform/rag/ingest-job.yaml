@@ -1,0 +1,75 @@
+# =============================================================================
+# ingest-job.yaml — ingest one batch of documents for one tenant
+# Book: Sovereign AI Stacks, Chapter 8
+#
+# Documents are copied by an authorised officer onto the rag-import volume
+# under /import/<tenant>/<batch>/. One Job per batch, because a batch shares
+# one classification and one set of allowed groups: the person who approves
+# the batch approves its ACL.
+# =============================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ingest-ministry-health-hr-2026-10
+  namespace: rag
+  labels:
+    app.kubernetes.io/name: rag-ingest
+    sovereign-ai/tenant: ministry-health
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rag-ingest
+        sovereign-ai/tenant: ministry-health
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: ingest
+          image: ghcr.io/prosperityai/sovereign-rag-ingest:1.0.0
+          args:
+            - --tenant=ministry-health
+            - --classification=restricted
+            - --groups
+            - hr-directorate
+            - --source=HR Manual 2026
+            - /import/ministry-health/hr-2026-10/hr-manual-2026.pdf
+          env:
+            - {name: QDRANT_URL, value: "http://qdrant.rag.svc:6333"}
+            - {name: TEI_EMBED_URL, value: "http://tei-bge-m3.rag.svc:8080"}
+            - name: TEI_API_KEY
+              valueFrom: {secretKeyRef: {name: tei-api-key, key: key}}
+            - name: QDRANT_API_KEY
+              valueFrom: {secretKeyRef: {name: qdrant-api-key, key: api-key}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: "4", memory: 8Gi}
+            limits: {memory: 12Gi}
+          volumeMounts:
+            - {name: import, mountPath: /import, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: import
+          persistentVolumeClaim: {claimName: rag-import, readOnly: true}
+        - name: tmp
+          emptyDir: {sizeLimit: 10Gi}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rag-import
+  namespace: rag
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: ceph-block
+  resources:
+    requests:
+      storage: 100Gi

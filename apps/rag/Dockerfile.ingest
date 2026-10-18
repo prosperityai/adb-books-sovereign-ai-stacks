@@ -1,0 +1,19 @@
+# Ingestion image: rag package + Docling (CPU) + Docling's layout/table models.
+# Book: Sovereign AI Stacks, Chapter 8
+#   docker build -f apps/rag/Dockerfile.ingest -t ghcr.io/prosperityai/sovereign-rag-ingest:1.0.0 apps/rag
+# Docling downloads its models from Hugging Face on first use. Here they are
+# downloaded at BUILD time on the connected side, so the enclave never asks.
+FROM docker.io/library/python:3.13-slim-trixie
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /src
+COPY pyproject.toml ./
+COPY src ./src
+# CPU-only PyTorch wheels: the CUDA build adds gigabytes ingestion does not use.
+RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu ".[ingest]" \
+ && docling-tools models download --output-dir /opt/docling-models
+ENV DOCLING_ARTIFACTS_PATH=/opt/docling-models \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin rag
+USER 10001
+ENTRYPOINT ["rag-ingest"]

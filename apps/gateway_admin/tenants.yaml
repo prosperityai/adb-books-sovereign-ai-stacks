@@ -1,0 +1,50 @@
+# =============================================================================
+# tenants.yaml — who may use which models, at what rate
+# Book: Sovereign AI Stacks, Chapter 6
+# Applied by provision_keys.py. Changing a limit here and re-running is the
+# ONLY supported way to change tenant access: the file is the audit record.
+# =============================================================================
+tenants:
+  - id: ministry-health
+    name: Ministry of Health
+    models: [qwen3.8-27b, gpt-oss-120b, bge-m3]
+    rpm_limit: 1200          # requests per minute, whole tenant
+    tpm_limit: 2000000       # tokens per minute, whole tenant
+    keys:
+      - alias: chat-ministry-health
+        purpose: chat-ui
+        secret_namespace: chat-ui
+        max_parallel_requests: 48
+      - alias: ministry-health-claims-batch
+        purpose: batch
+        secret_namespace: ministry-health-apps
+        models: [qwen3.8-27b-batch]
+        rpm_limit: 30
+        max_parallel_requests: 4
+
+  - id: revenue-authority
+    name: Revenue Authority
+    models: [qwen3.8-27b, bge-m3]
+    rpm_limit: 600
+    tpm_limit: 1000000
+    keys:
+      - alias: chat-revenue-authority
+        purpose: chat-ui
+        secret_namespace: chat-ui
+        max_parallel_requests: 24
+
+  # Platform-internal consumers
+  - id: platform
+    name: Platform services
+    models: [qwen3.8-27b, gpt-oss-120b, bge-m3]
+    rpm_limit: 600
+    tpm_limit: 1000000
+    keys:
+      - alias: rag-api
+        purpose: service
+        secret_namespace: rag
+        max_parallel_requests: 32
+      - alias: eval-harness
+        purpose: service
+        secret_namespace: evals
+        max_parallel_requests: 16

@@ -1,0 +1,67 @@
+# =============================================================================
+# Qdrant 1.19.2 (chart 1.19.2) — per-tenant vector collections
+# Book: Sovereign AI Stacks, Chapter 8
+# Secret: qdrant-api-key, key "api-key"
+# =============================================================================
+replicaCount: 3
+
+image:
+  repository: docker.io/qdrant/qdrant
+  tag: v1.19.2
+  pullPolicy: IfNotPresent
+
+# The chart reads this Secret with Helm's lookup() at install time, so create
+# it BEFORE `helm install` (`helm template` renders an empty Secret).
+apiKey:
+  valueFrom:
+    secretKeyRef:
+      name: qdrant-api-key
+      key: api-key
+
+config:
+  # Qdrant reports anonymous usage telemetry by default. Switch it off.
+  telemetry_disabled: true
+  cluster:
+    enabled: true
+    p2p:
+      port: 6335
+      enable_tls: false     # node-to-node traffic is WireGuard-encrypted (Chapter 4)
+    consensus:
+      tick_period_ms: 100
+  service:
+    enable_tls: false
+  storage:
+    # Two copies of every shard: losing one node loses no vectors.
+    collection:
+      replication_factor: 2
+      write_consistency_factor: 1
+
+persistence:
+  accessModes: ["ReadWriteOnce"]
+  size: 50Gi
+  storageClassName: ceph-block
+
+snapshotPersistence:
+  enabled: true
+  size: 50Gi
+  storageClassName: ceph-block
+
+# The chart's volume-ownership init container uses an unpinned ":latest"
+# image; fsGroup in the pod security context does the same job.
+updateVolumeFsOwnership: false
+podSecurityContext:
+  fsGroup: 3000
+  fsGroupChangePolicy: OnRootMismatch
+
+resources:
+  requests: {cpu: "1", memory: 4Gi}
+  limits: {memory: 8Gi}
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+# `helm test` pod: pin its image instead of the chart's ":latest" default.
+chartTests:
+  dbInteraction:
+    image: quay.io/curl/curl:8.17.0
