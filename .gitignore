@@ -1,0 +1,36 @@
+# Secrets and local config
+.env
+*.env
+!.env.example
+!cluster.env.example
+talosconfig
+kubeconfig
+*.pem
+*.key
+cosign.key
+
+# Air-gap bundles and model weights (never commit)
+*.tar.zst
+*.tar
+zarf-package-*
+models-cache/
+transfer-media/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Benchmarks and eval output
+tools/bench/results/
+evals/results/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
