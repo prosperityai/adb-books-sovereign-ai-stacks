@@ -1,0 +1,33 @@
+# CiliumNetworkPolicy: the chat UI may resolve names via cluster DNS and talk
+# to the AI gateway. Every other egress destination is denied.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: chat-ui-egress-lockdown
+  namespace: chat-ui
+spec:
+  # Empty selector = every pod in the chat-ui namespace
+  endpointSelector: {}
+  egress:
+    # 1. DNS to kube-dns only. The dns rule routes lookups through Cilium's
+    #    DNS proxy, so Hubble logs every name the UI tries to resolve.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchPattern: "*"
+    # 2. The AI gateway (LiteLLM listens on 4000, see Chapter 6)
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: ai-gateway
+            app.kubernetes.io/name: litellm
+      toPorts:
+        - ports:
+            - port: "4000"
+              protocol: TCP
