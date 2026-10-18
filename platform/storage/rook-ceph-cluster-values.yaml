@@ -1,0 +1,82 @@
+# =============================================================================
+# Rook-Ceph cluster v1.21.0 values — production reference (3 control-plane
+# nodes each carrying one data NVMe in addition to the Talos system disk)
+# Book: Sovereign AI Stacks, Chapter 4
+# Ceph image: chart default quay.io/ceph/ceph:v20.2.4
+# =============================================================================
+operatorNamespace: rook-ceph
+
+toolbox:
+  enabled: true
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+
+cephClusterSpec:
+  dataDirHostPath: /var/lib/rook
+  mon:
+    count: 3
+    allowMultiplePerNode: false
+  mgr:
+    count: 2
+  dashboard:
+    enabled: true
+    ssl: true
+  # Encrypt Ceph's own network traffic (msgr2 secure mode).
+  network:
+    connections:
+      encryption:
+        enabled: true
+      requireMsgr2: true
+  placement:
+    all:
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: node-role.kubernetes.io/control-plane
+                  operator: Exists
+  storage:
+    useAllNodes: true
+    useAllDevices: false
+    # Only the dedicated data disk; never the Talos system disk.
+    deviceFilter: "^nvme1n1$"
+    config:
+      # Encrypt OSDs at rest with LUKS; keys stay in the cluster.
+      encryptedDevice: "true"
+
+# One replicated RBD pool, the cluster's default StorageClass: model caches,
+# Postgres, Qdrant and Loki all use it.
+cephBlockPools:
+  - name: ceph-blockpool
+    spec:
+      failureDomain: host
+      replicated:
+        size: 3
+    storageClass:
+      enabled: true
+      name: ceph-block
+      isDefault: true
+      reclaimPolicy: Retain
+      allowVolumeExpansion: true
+      volumeBindingMode: WaitForFirstConsumer
+      parameters:
+        imageFormat: "2"
+        imageFeatures: layering
+        csi.storage.k8s.io/provisioner-secret-name: rook-csi-rbd-provisioner
+        csi.storage.k8s.io/provisioner-secret-namespace: rook-ceph
+        csi.storage.k8s.io/controller-expand-secret-name: rook-csi-rbd-provisioner
+        csi.storage.k8s.io/controller-expand-secret-namespace: rook-ceph
+        csi.storage.k8s.io/node-stage-secret-name: rook-csi-rbd-node
+        csi.storage.k8s.io/node-stage-secret-namespace: rook-ceph
+        csi.storage.k8s.io/fstype: ext4
+
+# No CephFS and no object store in-cluster. Backups must live on separate
+# storage (Chapter 12), not on the cluster they protect.
+cephFileSystems: []
+cephObjectStores: []

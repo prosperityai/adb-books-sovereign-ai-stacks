@@ -1,0 +1,80 @@
+# =============================================================================
+# harbor.yml.tmpl — Harbor 2.15 offline-installer configuration for the enclave
+#
+# Book: Sovereign AI Stacks, Chapter 3
+# Render with airgap/harbor/install_harbor.sh, which substitutes the ${...}
+# variables from the environment. Never commit the rendered harbor.yml.
+# =============================================================================
+hostname: ${HARBOR_HOSTNAME}
+
+# HTTP stays enabled only so Harbor can redirect to HTTPS.
+http:
+  port: 80
+
+https:
+  port: 443
+  certificate: ${HARBOR_TLS_CERT}
+  private_key: ${HARBOR_TLS_KEY}
+
+harbor_admin_password: ${HARBOR_ADMIN_PASSWORD}
+
+database:
+  password: ${HARBOR_DB_PASSWORD}
+  max_idle_conns: 100
+  max_open_conns: 900
+  conn_max_idle_time: 0
+
+# Put this on dedicated storage: model weights alone will exceed 200 GB.
+data_volume: ${HARBOR_DATA_VOLUME}
+
+trivy:
+  ignore_unfixed: false
+  # The enclave has no internet: never try to download the vulnerability DB.
+  # Fresh DBs arrive through the same signed transfer bundle (Chapter 3.4).
+  skip_update: true
+  skip_java_db_update: true
+  offline_scan: true
+  security_check: vuln
+  insecure: false
+  timeout: 10m0s
+
+jobservice:
+  max_job_workers: 10
+  job_loggers:
+    - STD_OUTPUT
+    - FILE
+  logger_sweeper_duration: 1
+
+notification:
+  webhook_job_max_retry: 3
+  webhook_job_http_client_timeout: 3
+
+log:
+  level: info
+  local:
+    rotate_count: 50
+    rotate_size: 200M
+    location: /var/log/harbor
+
+# No proxy: the enclave has no route out, and a configured proxy would hide
+# misconfiguration rather than reveal it.
+proxy:
+  http_proxy:
+  https_proxy:
+  no_proxy:
+  components:
+    - core
+    - jobservice
+    - trivy
+
+upload_purging:
+  enabled: true
+  age: 168h
+  interval: 24h
+  dryrun: false
+
+cache:
+  enabled: false
+  expire_hours: 24
+
+_version: 2.15.0

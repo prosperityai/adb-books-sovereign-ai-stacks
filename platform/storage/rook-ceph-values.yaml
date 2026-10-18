@@ -1,0 +1,17 @@
+# =============================================================================
+# Rook operator v1.21.0 values
+# Book: Sovereign AI Stacks, Chapter 4
+# =============================================================================
+# Operator may run on control-plane nodes alongside the mons (see cluster values).
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+
+# Talos has no udev-based disk hotplug workflow we want Rook reacting to;
+# disks are declared explicitly in the cluster values.
+enableDiscoveryDaemon: false
+
+# Prometheus CRDs are installed in Chapter 9; enable then.
+monitoring:
+  enabled: false

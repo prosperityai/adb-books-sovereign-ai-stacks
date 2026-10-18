@@ -1,0 +1,46 @@
+# =============================================================================
+# airgap/models.yaml — every model that may cross the air gap
+#
+# Book: Sovereign AI Stacks, Chapter 3
+#
+# A model is pinned by Hugging Face commit SHA, never by branch name. "main"
+# can change between the day you test and the day you transfer. Revisions
+# below were read from the Hugging Face API on 2026-10-19.
+# =============================================================================
+
+models:
+  - name: qwen3.8-27b-fp8
+    repo: Qwen/Qwen3.8-27B-FP8
+    revision: 017b9c7af6b5689d5dd426a76e0bc077eb5ca20a
+    licence: Apache-2.0
+    purpose: Primary chat and RAG model (Chapter 5)
+    allow_patterns: ["*.safetensors", "*.json", "*.txt", "*.jinja", "*.py", "merges.txt", "vocab.json"]
+
+  - name: gpt-oss-120b
+    repo: openai/gpt-oss-120b
+    revision: b5c939de8f754692c1647ca79fbf85e8c1e70f8a
+    licence: Apache-2.0
+    purpose: Large reasoning model for analyst tier (Chapter 5)
+    # Exclude original/ (duplicate weights in another layout) and metal/
+    allow_patterns: ["*.safetensors", "*.json", "*.jinja", "*.txt"]
+
+  - name: gemma-4-26b-a4b
+    repo: google/gemma-4-26B-A4B-it
+    revision: 4d7ae4984b7db7de8f8457170b3f1a419ee76d52
+    licence: Apache-2.0
+    purpose: Budget-lab and edge model (Chapter 5)
+    allow_patterns: ["*.safetensors", "*.json", "*.jinja", "*.model"]
+
+  - name: bge-m3
+    repo: BAAI/bge-m3
+    revision: 5617a9f61b028005a4858fdac845db406aefb181
+    licence: MIT
+    purpose: Multilingual embeddings for RAG (Chapter 8)
+    allow_patterns: ["*.json", "pytorch_model.bin", "sentencepiece.bpe.model", "1_Pooling/*", "onnx/*"]
+
+  - name: bge-reranker-v2-m3
+    repo: BAAI/bge-reranker-v2-m3
+    revision: 953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e
+    licence: Apache-2.0
+    purpose: Multilingual reranker for RAG (Chapter 8)
+    allow_patterns: ["*.json", "model.safetensors", "sentencepiece.bpe.model"]

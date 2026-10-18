@@ -1,0 +1,23 @@
+# egress-test-pod.yaml — proves the egress baseline (Chapter 4 lab).
+# The pod tries to reach the internet; in a correct enclave it prints BLOCKED.
+# Runs as non-root with no privileges so it is admitted by "restricted" namespaces.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: egress-test
+  namespace: default
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: docker.io/library/busybox:1.37.0
+      command: ["sh", "-c", "wget -T 5 -q -O- https://huggingface.co >/dev/null 2>&1 && echo REACHABLE || echo BLOCKED"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]

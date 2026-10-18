@@ -1,0 +1,44 @@
+# =============================================================================
+# gpu-worker.yaml — GPU worker nodes only.
+# Book: Sovereign AI Stacks, Chapter 4
+# The NVIDIA driver and container toolkit come from Talos system extensions
+# baked into the installer image (SCHEMATIC_GPU); here we load the modules.
+# =============================================================================
+apiVersion: v1alpha1
+kind: KernelModuleConfig
+name: nvidia
+---
+apiVersion: v1alpha1
+kind: KernelModuleConfig
+name: nvidia_uvm
+---
+apiVersion: v1alpha1
+kind: KernelModuleConfig
+name: nvidia_drm
+---
+apiVersion: v1alpha1
+kind: KernelModuleConfig
+name: nvidia_modeset
+---
+apiVersion: v1alpha1
+kind: SysctlConfig
+params:
+  # Required by the NVIDIA container toolkit on Talos
+  net.core.bpf_jit_harden: "1"
+---
+# Label for the device plugin's node affinity. (The NoSchedule taint is added
+# by bootstrap.sh: kubelets may not set their own taints under NodeRestriction.)
+apiVersion: v1alpha1
+kind: KubeNodeConfig
+labels:
+  nvidia.com/gpu.present: "true"
+  node.sovereign-ai/role: gpu
+---
+# Install from the GPU schematic: Talos plus NVIDIA modules and toolkit.
+apiVersion: v1alpha1
+kind: UnattendedInstallConfig
+installer:
+  image: factory.talos.dev/metal-installer/${SCHEMATIC_GPU}:${TALOS_VERSION}
+provisioning:
+  diskSelector:
+    match: ${INSTALL_DISK_SELECTOR}

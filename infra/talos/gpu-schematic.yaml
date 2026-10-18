@@ -1,0 +1,9 @@
+# Image Factory schematic for GPU workers (Talos v1.14.4).
+# POST this file to https://factory.talos.dev/schematics on the connected side;
+# the returned id is SCHEMATIC_GPU in cluster.env.
+customization:
+  systemExtensions:
+    officialExtensions:
+      - siderolabs/nvidia-open-gpu-kernel-modules-production
+      - siderolabs/nvidia-container-toolkit-production
+      - siderolabs/nvidia-fabricmanager-production

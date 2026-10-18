@@ -1,0 +1,27 @@
+# =============================================================================
+# controlplane.yaml — control-plane nodes only.
+# Book: Sovereign AI Stacks, Chapter 4
+# =============================================================================
+# Cilium replaces both the default CNI and kube-proxy (installed in step 6 of
+# bootstrap.sh), so remove Flannel and disable kube-proxy.
+apiVersion: v1alpha1
+kind: KubeFlannelCNIConfig
+$patch: delete
+---
+apiVersion: v1alpha1
+kind: KubeProxyConfig
+enabled: false
+---
+# Shared API endpoint without an external load balancer.
+apiVersion: v1alpha1
+kind: Layer2VIPConfig
+name: ${CLUSTER_VIP}
+link: ${VIP_INTERFACE}
+---
+apiVersion: v1alpha1
+kind: UnattendedInstallConfig
+installer:
+  image: factory.talos.dev/metal-installer/${SCHEMATIC_CONTROL_PLANE}:${TALOS_VERSION}
+provisioning:
+  diskSelector:
+    match: ${INSTALL_DISK_SELECTOR}

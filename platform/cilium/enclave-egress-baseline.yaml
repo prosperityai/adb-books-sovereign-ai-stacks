@@ -1,0 +1,43 @@
+# =============================================================================
+# enclave-egress-baseline.yaml — cluster-wide egress baseline
+# Book: Sovereign AI Stacks, Chapter 4
+#
+# Selects every pod in the cluster. Because the policy has an egress section,
+# any destination it does not allow is DENIED for every pod: the internet,
+# and any enclave network not listed below. Namespaced policies can add
+# allowances (union semantics); Chapter 7's Kyverno policy forbids any policy
+# that allows the "world" entity.
+# =============================================================================
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: enclave-egress-baseline
+spec:
+  endpointSelector: {}
+  egress:
+    # Pods, nodes, the API server and other in-cluster endpoints.
+    - toEntities:
+        - cluster
+    # DNS through kube-dns only, via Cilium's DNS proxy so Hubble records
+    # every name every pod resolves.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchPattern: "*"
+    # Enclave shared services: Harbor and the internal NTP/DNS servers.
+    # Replace with your enclave service subnet. Nothing else is reachable.
+    - toCIDR:
+        - 10.20.0.0/24
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+            - port: "123"
+              protocol: UDP

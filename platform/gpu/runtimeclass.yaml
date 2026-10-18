@@ -1,0 +1,15 @@
+# The nvidia-container-toolkit Talos extension registers a containerd runtime
+# handler named "nvidia". Pods that need GPUs select it with runtimeClassName.
+# Book: Sovereign AI Stacks, Chapter 4
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: nvidia
+handler: nvidia
+scheduling:
+  nodeSelector:
+    nvidia.com/gpu.present: "true"
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule

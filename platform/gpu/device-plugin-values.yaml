@@ -1,0 +1,28 @@
+# =============================================================================
+# NVIDIA k8s-device-plugin 0.20.1 values for Talos
+# Book: Sovereign AI Stacks, Chapter 4
+#
+# On Talos the driver and container toolkit are immutable system extensions,
+# so the GPU Operator's main jobs (installing them) do not apply. We deploy
+# the two components that remain useful: this device plugin (advertises
+# nvidia.com/gpu to the scheduler) and DCGM exporter (GPU metrics).
+# =============================================================================
+runtimeClassName: nvidia
+
+# GPU Feature Discovery labels nodes with GPU model, memory and MIG capability,
+# which Chapter 5 uses to pin large models to 80 GB cards.
+gfd:
+  enabled: true
+
+# NFD is a dependency of GFD; run it, but only where GPUs exist.
+nfd:
+  enableNodeFeatureApi: true
+
+# One whole GPU per nvidia.com/gpu request. MIG partitioning ("single" or
+# "mixed") is a per-site decision; see Chapter 4.3.
+migStrategy: none
+
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule

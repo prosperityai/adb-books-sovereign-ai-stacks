@@ -1,0 +1,194 @@
+# =============================================================================
+# zarf.yaml — the complete platform, as one package that crosses the air gap
+#
+# Book: Sovereign AI Stacks, Chapter 3 (charts and manifests are added by
+#       Chapters 4-12; the images lists are generated, see below)
+# Zarf: v0.88.0
+#
+# Workflow (connected side):
+#   zarf dev find-images airgap/ --update   # render every chart, refresh images
+#   zarf package create airgap/ --confirm -o transfer/ -m 3900 \
+#        --signing-key cosign.key --signing-key-pass "$COSIGN_PASSWORD"
+#
+# The images lists below are written by `zarf dev find-images --update`.
+# Never edit them by hand: change a chart version or values file, then re-run.
+# =============================================================================
+kind: ZarfPackageConfig
+metadata:
+  name: sovereign-platform
+  version: 1.0.0
+  description: Sovereign AI Stacks reference platform (Kubernetes 1.37, vLLM 0.32)
+  architecture: amd64
+
+components:
+  # --- Chapter 4: networking, GPUs, storage ---------------------------------
+  - name: cluster-core
+    required: true
+    manifests:
+      - name: cluster-baseline
+        files:
+          - ../platform/base/namespaces.yaml
+          - ../platform/gpu/runtimeclass.yaml
+          - ../platform/cilium/enclave-egress-baseline.yaml
+          - ../platform/base/egress-test-pod.yaml
+          - ../platform/base/egress-test-pod.yaml
+    charts:
+      - name: cilium
+        url: https://helm.cilium.io/
+        version: 1.20.3
+        namespace: kube-system
+        valuesFiles:
+          - ../platform/cilium/values.yaml
+      - name: nvidia-device-plugin
+        url: https://nvidia.github.io/k8s-device-plugin
+        version: 0.20.1
+        namespace: gpu
+        valuesFiles:
+          - ../platform/gpu/device-plugin-values.yaml
+      - name: dcgm-exporter
+        url: https://nvidia.github.io/dcgm-exporter/helm-charts
+        version: 4.8.4
+        namespace: gpu
+        valuesFiles:
+          - ../platform/gpu/dcgm-exporter-values.yaml
+      - name: rook-ceph
+        url: https://charts.rook.io/release
+        version: v1.21.0
+        namespace: rook-ceph
+        valuesFiles:
+          - ../platform/storage/rook-ceph-values.yaml
+      - name: rook-ceph-cluster
+        url: https://charts.rook.io/release
+        version: v1.21.0
+        namespace: rook-ceph
+        valuesFiles:
+          - ../platform/storage/rook-ceph-cluster-values.yaml
+
+  # --- Chapters 5 and 8: inference and embeddings ---------------------------
+  - name: inference
+    required: true
+    manifests:
+      - name: inference
+        namespace: inference
+        files:
+          - ../platform/inference/vllm-qwen3-8-27b.yaml
+          - ../platform/inference/vllm-gpt-oss-120b.yaml
+      - name: embeddings
+        namespace: rag
+        files:
+          - ../platform/rag/tei-bge-m3.yaml
+          - ../platform/rag/tei-reranker.yaml
+
+  # --- Chapter 6: gateway, its database and the chat UI ---------------------
+  - name: gateway
+    required: true
+    charts:
+      - name: cloudnative-pg
+        url: https://cloudnative-pg.github.io/charts
+        version: 0.29.1
+        namespace: cnpg-system
+      - name: litellm-helm
+        url: oci://ghcr.io/berriai/litellm-helm
+        version: 1.106.0
+        namespace: ai-gateway
+        valuesFiles:
+          - ../platform/gateway/litellm-values.yaml
+      - name: open-webui
+        url: https://helm.openwebui.com
+        version: 17.0.0
+        namespace: chat-ui
+        valuesFiles:
+          - ../platform/chat-ui/open-webui-values.yaml
+    manifests:
+      - name: gateway-db
+        namespace: ai-gateway
+        files:
+          - ../platform/gateway/postgres-cluster.yaml
+
+  # --- Chapter 7: identity and policy ---------------------------------------
+  - name: identity
+    required: true
+    manifests:
+      - name: keycloak-operator
+        namespace: identity
+        files:
+          - https://raw.githubusercontent.com/keycloak/keycloak-k8s-resources/26.8.1/kubernetes/keycloaks.k8s.keycloak.org-v1.yml
+          - https://raw.githubusercontent.com/keycloak/keycloak-k8s-resources/26.8.1/kubernetes/keycloakrealmimports.k8s.keycloak.org-v1.yml
+          - https://raw.githubusercontent.com/keycloak/keycloak-k8s-resources/26.8.1/kubernetes/kubernetes.yml
+      - name: keycloak
+        namespace: identity
+        files:
+          - ../platform/identity/keycloak.yaml
+    charts:
+      - name: kyverno
+        url: https://kyverno.github.io/kyverno/
+        version: 3.9.1
+        namespace: kyverno
+        valuesFiles:
+          - ../platform/policies/kyverno-values.yaml
+
+  # --- Chapter 8: vector database and RAG service ---------------------------
+  - name: rag
+    required: true
+    charts:
+      - name: qdrant
+        url: https://qdrant.github.io/qdrant-helm
+        version: 1.19.2
+        namespace: rag
+        valuesFiles:
+          - ../platform/rag/qdrant-values.yaml
+    manifests:
+      - name: rag-api
+        namespace: rag
+        files:
+          - ../platform/rag/rag-api.yaml
+
+  # --- Chapter 9: observability ---------------------------------------------
+  - name: observability
+    required: true
+    charts:
+      - name: kube-prometheus-stack
+        url: https://prometheus-community.github.io/helm-charts
+        version: 92.10.1
+        namespace: monitoring
+        valuesFiles:
+          - ../platform/observability/kube-prometheus-values.yaml
+      - name: loki
+        url: https://grafana.github.io/helm-charts
+        version: 7.3.0
+        namespace: monitoring
+        valuesFiles:
+          - ../platform/observability/loki-values.yaml
+      - name: langfuse
+        url: https://langfuse.github.io/langfuse-k8s
+        version: 2.1.5
+        namespace: monitoring
+        valuesFiles:
+          - ../platform/observability/langfuse-values.yaml
+
+  # --- Chapter 10: runtime security and audit -------------------------------
+  - name: security
+    required: true
+    charts:
+      - name: falco
+        url: https://falcosecurity.github.io/charts
+        version: 9.2.0
+        namespace: falco
+        valuesFiles:
+          - ../platform/security/falco-values.yaml
+    manifests:
+      - name: audit-sink
+        namespace: ai-gateway
+        files:
+          - ../platform/security/audit-sink.yaml
+
+  # --- Chapter 12: backup and disaster recovery -----------------------------
+  - name: backup
+    required: true
+    charts:
+      - name: velero
+        url: https://vmware-tanzu.github.io/helm-charts
+        version: 12.2.1
+        namespace: velero
+        valuesFiles:
+          - ../ops/backup/velero-values.yaml

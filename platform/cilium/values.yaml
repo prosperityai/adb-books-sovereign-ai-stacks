@@ -1,0 +1,57 @@
+# =============================================================================
+# Cilium 1.20.3 values for Talos v1.14 in an air-gapped enclave
+# Book: Sovereign AI Stacks, Chapter 4
+# =============================================================================
+# Talos runs KubePrism, a local API load balancer on every node at
+# localhost:7445. Pointing Cilium at it removes the need for kube-proxy and for
+# an external load balancer in front of the API servers.
+kubeProxyReplacement: true
+k8sServiceHost: localhost
+k8sServicePort: 7445
+
+ipam:
+  mode: kubernetes
+
+# Talos mounts cgroupv2 itself and does not allow Cilium to mount it again.
+cgroup:
+  autoMount:
+    enabled: false
+  hostRoot: /sys/fs/cgroup
+
+# Talos forbids SYS_MODULE; Cilium works without it on Talos kernels.
+securityContext:
+  capabilities:
+    ciliumAgent: [CHOWN, KILL, NET_ADMIN, NET_RAW, IPC_LOCK, SYS_ADMIN, SYS_RESOURCE, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    cleanCiliumState: [NET_ADMIN, SYS_ADMIN, SYS_RESOURCE]
+
+# Encrypt pod-to-pod traffic between nodes. Prompts and documents cross the
+# node network constantly; WireGuard costs little CPU and closes a sniffing path.
+encryption:
+  enabled: true
+  type: wireguard
+
+# Hubble: flow visibility is how you prove isolation (Chapter 1) and detect
+# breaches of it (Chapter 10).
+hubble:
+  enabled: true
+  relay:
+    enabled: true
+  ui:
+    enabled: true
+  metrics:
+    enabled:
+      - dns
+      - drop
+      - tcp
+      - flow
+      - policy:sourceContext=app|workload-name|pod|reserved-identity;destinationContext=app|workload-name|pod|dns|reserved-identity;labelsContext=source_namespace,destination_namespace
+    serviceMonitor:
+      enabled: false   # switched on in Chapter 9 once the Prometheus CRDs exist
+
+operator:
+  replicas: 2
+  prometheus:
+    enabled: true
+
+prometheus:
+  enabled: true

@@ -1,0 +1,17 @@
+# =============================================================================
+# DCGM exporter 4.8.4 values — GPU utilisation, memory, temperature, XID errors
+# Book: Sovereign AI Stacks, Chapters 4 and 9
+# =============================================================================
+runtimeClassName: nvidia
+
+nodeSelector:
+  nvidia.com/gpu.present: "true"
+
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+
+# The ServiceMonitor CRD arrives with kube-prometheus-stack in Chapter 9.
+serviceMonitor:
+  enabled: false

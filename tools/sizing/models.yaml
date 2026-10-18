@@ -1,0 +1,77 @@
+# =============================================================================
+# models.yaml — architecture and hardware parameters for gpu_sizer.py
+#
+# Book: Sovereign AI Stacks, Chapter 2
+#
+# Model figures were read from each model's config.json and safetensors index
+# on Hugging Face on 2026-10-19. weights_gb values are MEASURED checkpoint
+# sizes (sum of .safetensors files, decimal GB). Anything not measured is
+# estimated by gpu_sizer.py from params_billion and flagged in its output.
+# =============================================================================
+
+models:
+  qwen3.8-27b:
+    hf_repo: Qwen/Qwen3.8-27B
+    licence: Apache-2.0
+    params_billion: 27.78
+    active_params_billion: 27.78        # dense
+    max_context: 262144
+    weights_gb:
+      bf16: 55.56                       # Qwen/Qwen3.8-27B
+      fp8: 30.87                        # Qwen/Qwen3.8-27B-FP8
+    # Hybrid architecture: 16 full-attention layers keep a KV cache that grows
+    # with context; 48 Gated DeltaNet (linear attention) layers keep a fixed-size
+    # recurrent state per sequence instead.
+    attention:
+      - {layers: 16, kv_heads: 4, head_dim: 256, window: null}
+    linear_state:
+      layers: 48
+      # 48 value heads x 128 key dim x 128 value dim (recurrent state)
+      # + (16*128*2 + 48*128) channels x 3 (conv state, kernel 4 - 1)
+      elements_per_layer: 817152
+
+  gpt-oss-120b:
+    hf_repo: openai/gpt-oss-120b
+    licence: Apache-2.0
+    params_billion: 116.83
+    active_params_billion: 5.13         # 4 of 128 experts per token
+    max_context: 131072
+    weights_gb:
+      mxfp4: 65.25                      # native MXFP4 experts, BF16 attention
+    attention:
+      - {layers: 18, kv_heads: 8, head_dim: 64, window: null}
+      - {layers: 18, kv_heads: 8, head_dim: 64, window: 128}
+
+  gemma-4-31b:
+    hf_repo: google/gemma-4-31B-it
+    licence: Apache-2.0
+    params_billion: 31.27
+    active_params_billion: 31.27        # dense
+    max_context: 262144
+    weights_gb:
+      bf16: 62.55
+    attention:
+      - {layers: 10, kv_heads: 4, head_dim: 512, window: null}     # global layers
+      - {layers: 50, kv_heads: 16, head_dim: 256, window: 1024}    # sliding layers
+
+  gemma-4-26b-a4b:
+    hf_repo: google/gemma-4-26B-A4B-it
+    licence: Apache-2.0
+    params_billion: 25.81
+    active_params_billion: 4.0          # nominal, from the "A4B" model name
+    max_context: 262144
+    weights_gb:
+      bf16: 51.61
+    attention:
+      - {layers: 5, kv_heads: 2, head_dim: 512, window: null}
+      - {layers: 25, kv_heads: 8, head_dim: 256, window: 1024}
+
+# Usable memory is what the GPU reports to the driver (nvidia-smi memory.total),
+# expressed in GiB. Bandwidth is the vendor's peak memory bandwidth in GB/s.
+gpus:
+  rtx-4090:      {memory_gib: 23.99, bandwidth_gbs: 1008}
+  l40s:          {memory_gib: 44.99, bandwidth_gbs: 864}
+  rtx-pro-6000:  {memory_gib: 95.59, bandwidth_gbs: 1792}
+  a100-80g:      {memory_gib: 79.25, bandwidth_gbs: 2039}
+  h100-80g:      {memory_gib: 79.65, bandwidth_gbs: 3350}
+  h200:          {memory_gib: 139.8, bandwidth_gbs: 4800}

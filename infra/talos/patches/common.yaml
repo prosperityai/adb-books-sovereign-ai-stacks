@@ -1,0 +1,51 @@
+# =============================================================================
+# common.yaml — applied to EVERY node. Rendered by bootstrap.sh (envsubst).
+# Book: Sovereign AI Stacks, Chapter 4 (Talos v1.14 multi-document config)
+# =============================================================================
+# Time: internal NTP only. Clock skew breaks TLS, OIDC and cosign verification.
+apiVersion: v1alpha1
+kind: TimeSyncConfig
+ntp:
+  servers:
+    - ${NTP_SERVER}
+---
+# DNS: internal resolver only. CoreDNS forwards to the host resolver, which
+# forwards here, so no pod can resolve through a public DNS server.
+apiVersion: v1alpha1
+kind: ResolverConfig
+nameservers:
+  - address: ${DNS_SERVER}
+hostDNS:
+  enabled: true
+  forwardKubeDNSToHost: true
+---
+# Every upstream registry ("*") is served from Harbor's mirror project.
+# overridePath keeps the upstream path: quay.io/cilium/cilium is fetched from
+# https://harbor/v2/mirror/cilium/cilium. skipFallback: never try the internet.
+apiVersion: v1alpha1
+kind: RegistryMirrorConfig
+name: "*"
+endpoints:
+  - url: https://${HARBOR_HOST}/v2/mirror
+    overridePath: true
+skipFallback: true
+---
+# Images that already name Harbor (our own apps, models) go straight to it.
+apiVersion: v1alpha1
+kind: RegistryMirrorConfig
+name: ${HARBOR_HOST}
+endpoints:
+  - url: https://${HARBOR_HOST}
+skipFallback: true
+---
+apiVersion: v1alpha1
+kind: RegistryAuthConfig
+name: ${HARBOR_HOST}
+username: ${HARBOR_PULL_USER}
+password: ${HARBOR_PULL_PASSWORD}
+---
+apiVersion: v1alpha1
+kind: RegistryTLSConfig
+name: ${HARBOR_HOST}
+ca: |-
+${ENCLAVE_CA_INDENTED}
