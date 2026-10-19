@@ -70,6 +70,7 @@ done
 #     re-pointed at different bytes, so a tag in a manifest is as good as a digest.
 for project in models apps; do
   curl -fsS "${AUTH[@]}" -H 'Content-Type: application/json' -X POST "$API/projects/$project/immutabletagrules" -d '{
+    "disabled":false,"action":"immutable","template":"immutable_template",
     "tag_selectors":[{"kind":"doublestar","decoration":"matches","pattern":"**"}],
     "scope_selectors":{"repository":[{"kind":"doublestar","decoration":"repoMatches","pattern":"**"}]}}' \
     && echo "tag immutability enabled on $project"

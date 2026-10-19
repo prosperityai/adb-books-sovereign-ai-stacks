@@ -89,12 +89,27 @@ async def _run(args: argparse.Namespace, env: dict[str, str], transport=None) ->
     if needs_rag and not (args.rag_url and token):
         print("warning: RAG target not configured; RAG cases will be recorded as errors", file=sys.stderr)
 
-    ep = Endpoints(args.gateway_url, key, args.rag_url, token, refresh, transport=transport,
-                   max_retries=args.max_retries, backoff_s=args.backoff)
+    ep = Endpoints(
+        args.gateway_url,
+        key,
+        args.rag_url,
+        token,
+        refresh,
+        transport=transport,
+        max_retries=args.max_retries,
+        backoff_s=args.backoff,
+    )
     try:
         run = await run_all(
-            ep, args.model, items, cases, qa_target=args.qa_target, concurrency=args.concurrency,
-            judge_model=args.judge_model, canary=canary, run_id=args.run_id,
+            ep,
+            args.model,
+            items,
+            cases,
+            qa_target=args.qa_target,
+            concurrency=args.concurrency,
+            judge_model=args.judge_model,
+            canary=canary,
+            run_id=args.run_id,
             progress=None if args.quiet else lambda line: print(line, file=sys.stderr),
         )
     finally:
@@ -118,14 +133,18 @@ def _print_summary(run: dict) -> None:
     print(f"run {run['run_id']}  model={run['model']}  target={run['qa_target']}")
     print(f"{'lang':<5} {'items':>5} {'accuracy':>9} {'citations':>9} {'language':>9} {'abstain':>8} {'p95_s':>7}")
     for lang, st in [*s["per_language"].items(), ("all", s["overall"])]:
-        print(f"{lang:<5} {st['items']:>5} {_pct(st['accuracy']):>9} {_pct(st['citation_rate']):>9} "
-              f"{_pct(st['language_match']):>9} {_pct(st['abstain_accuracy']):>8} {st['latency_p95_s']:>7}")
+        print(
+            f"{lang:<5} {st['items']:>5} {_pct(st['accuracy']):>9} {_pct(st['citation_rate']):>9} "
+            f"{_pct(st['language_match']):>9} {_pct(st['abstain_accuracy']):>8} {st['latency_p95_s']:>7}"
+        )
     rt = s["redteam"]
     if rt["cases"]:
         print(f"red team: {rt['passed']}/{rt['cases']} passed")
     if s["overall"]["cached"]:
-        print(f"warning: {s['overall']['cached']} RAG answers came from the answer cache; "
-              "restart rag-api or wait RAG_CACHE_TTL before measuring")
+        print(
+            f"warning: {s['overall']['cached']} RAG answers came from the answer cache; "
+            "restart rag-api or wait RAG_CACHE_TTL before measuring"
+        )
 
 
 def _gate(args: argparse.Namespace) -> int:
@@ -162,7 +181,7 @@ def _corpus(args: argparse.Namespace) -> int:
         body = [f"# {source}", ""] + [f"## {sec} {title}\n\n{text}\n" for sec, (title, text, _) in ordered]
         path = args.out / f"mohh-handbook-{lang}.md"
         path.write_text("\n".join(body), encoding="utf-8")
-        print(f"{path}: {len(sections)} sections, ingest with --source \"{source}\"")
+        print(f'{path}: {len(sections)} sections, ingest with --source "{source}"')
     return 0
 
 

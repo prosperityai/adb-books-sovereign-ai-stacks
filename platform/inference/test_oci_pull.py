@@ -2,7 +2,7 @@
 
 Unit tests run anywhere. The integration test needs a throwaway registry:
     registry serve config.yml   # distribution v3 on 127.0.0.1:5000
-    OCI_TEST_REF=127.0.0.1:5000/models/tiny-bert:f171d7baecaf pytest platform/inference
+    OCI_TEST_REF=127.0.0.1:5000/models/tiny-bert-onnx:f171d7baecaf pytest platform/inference
 """
 
 from __future__ import annotations

@@ -49,9 +49,26 @@ snapshotPersistence:
 # The chart's volume-ownership init container uses an unpinned ":latest"
 # image; fsGroup in the pod security context does the same job.
 updateVolumeFsOwnership: false
+# The rag namespace enforces Pod Security "restricted": the chart's defaults
+# set neither a seccomp profile nor dropped capabilities, so add both.
 podSecurityContext:
   fsGroup: 3000
   fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  capabilities:
+    drop: ["ALL"]
+
+# replication_factor 2 survives a node loss only if replicas sit on
+# different nodes.
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: qdrant
+        topologyKey: kubernetes.io/hostname
 
 resources:
   requests: {cpu: "1", memory: 4Gi}

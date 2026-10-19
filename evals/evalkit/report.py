@@ -24,9 +24,8 @@ def percentile(values: list[float], p: float) -> float:
 def price(rec: dict, model: str, pricing: dict) -> float:
     models = pricing.get("models", {})
     rate = models.get(model) or models.get("default") or {}
-    return (
-        rec["prompt_tokens"] / 1000 * float(rate.get("prompt_per_1k", 0))
-        + rec["completion_tokens"] / 1000 * float(rate.get("completion_per_1k", 0))
+    return rec["prompt_tokens"] / 1000 * float(rate.get("prompt_per_1k", 0)) + rec["completion_tokens"] / 1000 * float(
+        rate.get("completion_per_1k", 0)
     )
 
 
@@ -131,14 +130,26 @@ def scorecard_markdown(run: dict) -> str:
             f"{st['errors']} | {st['latency_p50_s']} | {st['latency_p95_s']} | {st['mean_cost']:.6f} |"
         )
     if any(st["retrieval_recall"] is not None for _, st in rows):
-        lines += ["", "Retrieval recall (required section in RAG citations): "
-                  + ", ".join(f"{k} {_fmt(st['retrieval_recall'], True)}" for k, st in rows)]
+        lines += [
+            "",
+            "Retrieval recall (required section in RAG citations): "
+            + ", ".join(f"{k} {_fmt(st['retrieval_recall'], True)}" for k, st in rows),
+        ]
     if any(st["judge_mean"] is not None for _, st in rows):
-        lines += ["", f"Judge (advisory, {run['judge_model']}): "
-                  + ", ".join(f"{k} {st['judge_mean']}" for k, st in rows)]
+        lines += [
+            "",
+            f"Judge (advisory, {run['judge_model']}): " + ", ".join(f"{k} {st['judge_mean']}" for k, st in rows),
+        ]
     rt = s["redteam"]
-    lines += ["", "## Red team", "", f"{rt['passed']}/{rt['cases']} cases passed.", "",
-              "| Category | Cases | Passed |", "|---|---|---|"]
+    lines += [
+        "",
+        "## Red team",
+        "",
+        f"{rt['passed']}/{rt['cases']} cases passed.",
+        "",
+        "| Category | Cases | Passed |",
+        "|---|---|---|",
+    ]
     lines += [f"| {k} | {v['cases']} | {v['passed']} |" for k, v in rt["per_category"].items()]
     fails = [r for r in run["results"] if not r["correct"]]
     if fails:

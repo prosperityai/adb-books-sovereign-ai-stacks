@@ -283,6 +283,17 @@ spec:
             summary: The audit database (CNPG cluster audit-db) is down
             description: The audit sink cannot persist events without it.
             runbook_url: https://runbooks.enclave.internal/llm-platform/AuditDatabaseDown
+        - alert: AuditSinkStoreErrors
+          expr: increase(audit_sink_store_errors_total[10m]) > 0
+          labels:
+            severity: critical
+            team: security
+          annotations:
+            summary: "The audit sink failed to store {{ $value | humanize }} batches in 10 minutes"
+            description: >-
+              The sink answered 503 and LiteLLM's generic_api logger does not retry, so those
+              events are lost. Check audit-db, then count the missing calls against LiteLLM_SpendLogs.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/AuditSinkStoreErrors
         - alert: GatewayCallbackFailures
           expr: sum by (callback_name) (increase(litellm_callback_logging_failures_metric_total[10m])) > 0
           labels:

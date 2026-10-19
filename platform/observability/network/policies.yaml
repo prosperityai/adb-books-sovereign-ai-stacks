@@ -72,8 +72,8 @@ spec:
 ---
 # 4. The monitoring namespace itself. Its components talk to each other
 #    freely (Alloy pushes to Loki, Grafana queries Prometheus, Langfuse uses
-#    ClickHouse and Valkey). From outside, two doors open for people and
-#    services (policies 5 and 6), plus two control-plane callers here.
+#    ClickHouse and Valkey). From outside, three doors open for people and
+#    services (policies 5 to 7), plus two control-plane callers here.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -134,3 +134,22 @@ spec:
       toPorts:
         - ports:
             - {port: "3000", protocol: TCP}
+---
+# 7. Falco's alerts (Chapter 10): falcosidekick posts to Alertmanager's API.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: alertmanager-from-falcosidekick
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: alertmanager
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: falco
+            app.kubernetes.io/name: falcosidekick
+      toPorts:
+        - ports:
+            - {port: "9093", protocol: TCP}

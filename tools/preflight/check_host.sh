@@ -86,6 +86,10 @@ json_escape() {
 # ----------------------------------------------------------------------------
 while [ $# -gt 0 ]; do
   case "$1" in
+    --profile|--egress|--data-path)
+      [ $# -ge 2 ] || { echo "$1 needs a value" >&2; usage; } ;;
+  esac
+  case "$1" in
     --profile)   PROFILE=${2:-}; shift 2 ;;
     --egress)    EGRESS_MODE=${2:-}; shift 2 ;;
     --data-path) DATA_PATH=${2:-}; shift 2 ;;
@@ -117,7 +121,8 @@ case "$PROFILE" in
     GPU_REQUIRED=1; MIN_GPU_COUNT=1; MIN_GPU_MIB=22000; MIN_VRAM_MIB=22000
     DEFAULT_EGRESS="ignore" ;;
   control-plane)
-    MIN_CPU=8;   MIN_RAM_GIB=30;   MIN_DISK_GIB=200
+    # Control-plane nodes also run the platform services (Chapter 4).
+    MIN_CPU=32;  MIN_RAM_GIB=250;  MIN_DISK_GIB=400
     GPU_REQUIRED=0; MIN_GPU_COUNT=0; MIN_GPU_MIB=0; MIN_VRAM_MIB=0
     DEFAULT_EGRESS="expect-closed" ;;
   gpu-worker)

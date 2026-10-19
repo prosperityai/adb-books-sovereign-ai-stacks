@@ -352,8 +352,12 @@ def verify(cfg: Config, s3: S3, run: str | None) -> dict:
         digest, size = s3.stream_sha256(item["key"])
         if digest != item["sha256"] or size != item["size"]:
             bad.append(item["key"])
-    return {"run": manifest["run"], "created_at": manifest["created_at"], "verified": len(manifest["items"]) - len(bad),
-            "corrupt": bad}
+    return {
+        "run": manifest["run"],
+        "created_at": manifest["created_at"],
+        "verified": len(manifest["items"]) - len(bad),
+        "corrupt": bad,
+    }
 
 
 def restore(cfg: Config, s3: S3, clients: list[Qdrant], run: str, collection: str | None, node: int | None) -> int:

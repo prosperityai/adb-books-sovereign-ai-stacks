@@ -1,7 +1,7 @@
 """FastAPI service: /v1/search and /v1/answer, tenant and ACL from the token only.
 
 Book: Sovereign AI Stacks, Chapter 8
-Run: uvicorn rag.api:app --host 0.0.0.0 --port 8000
+Run: uvicorn rag.api:create_app --factory --host 0.0.0.0 --port 8000
 """
 
 # No `from __future__ import annotations` here: FastAPI must resolve the

@@ -8,6 +8,7 @@ metadata:
   namespace: default
 spec:
   restartPolicy: Never
+  automountServiceAccountToken: false
   securityContext:
     runAsNonRoot: true
     runAsUser: 65534
@@ -17,6 +18,10 @@ spec:
     - name: probe
       image: docker.io/library/busybox:1.37.0
       command: ["sh", "-c", "wget -T 5 -q -O- https://huggingface.co >/dev/null 2>&1 && echo REACHABLE || echo BLOCKED"]
+      # Requests and a memory limit, like every other workload in the book.
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {memory: 32Mi}
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:

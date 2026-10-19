@@ -13,6 +13,7 @@ Every version the book and this repository depend on, with the date it was last 
 | NVIDIA device plugin (chart) | 0.20.1 | 4 | 2026-10-19 |
 | DCGM exporter (chart / image) | 4.8.4 / 4.6.1-4.8.4-distroless | 4, 9 | 2026-10-19 |
 | Rook-Ceph (charts) | v1.21.0 | 4 | 2026-10-19 |
+| Ceph-CSI drivers (chart; operator 1.1.0 ships with Rook) | 1.1.0 | 4 | 2026-10-19 |
 | Harbor | 2.15.4 | 3 | 2026-10-19 |
 | Zarf | v0.88.0 | 3 | 2026-10-19 |
 | cosign / syft / oras / trivy | 2.6.5 / 1.54.1 / 1.3.5 / 0.76.0 | 3, App. A | 2026-10-19 |

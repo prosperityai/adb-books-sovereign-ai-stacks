@@ -63,13 +63,29 @@ def test_free_gpus_subtracts_running_requests_only() -> None:
     objs = {
         "items": [
             {"kind": "Node", "metadata": {"name": "gpu-node-1"}, "status": {"allocatable": {"nvidia.com/gpu": "8"}}},
-            {"kind": "Node", "metadata": {"name": "gpu-node-2"}, "spec": {"unschedulable": True},
-             "status": {"allocatable": {"nvidia.com/gpu": "8"}}},
+            {
+                "kind": "Node",
+                "metadata": {"name": "gpu-node-2"},
+                "spec": {"unschedulable": True},
+                "status": {"allocatable": {"nvidia.com/gpu": "8"}},
+            },
             {"kind": "Node", "metadata": {"name": "cp-1"}, "status": {"allocatable": {}}},
-            {"kind": "Pod", "spec": {"nodeName": "gpu-node-1", "containers": [
-                {"resources": {"requests": {"nvidia.com/gpu": "2"}}}]}, "status": {"phase": "Running"}},
-            {"kind": "Pod", "spec": {"nodeName": "gpu-node-1", "containers": [
-                {"resources": {"requests": {"nvidia.com/gpu": "1"}}}]}, "status": {"phase": "Succeeded"}},
+            {
+                "kind": "Pod",
+                "spec": {
+                    "nodeName": "gpu-node-1",
+                    "containers": [{"resources": {"requests": {"nvidia.com/gpu": "2"}}}],
+                },
+                "status": {"phase": "Running"},
+            },
+            {
+                "kind": "Pod",
+                "spec": {
+                    "nodeName": "gpu-node-1",
+                    "containers": [{"resources": {"requests": {"nvidia.com/gpu": "1"}}}],
+                },
+                "status": {"phase": "Succeeded"},
+            },
         ]
     }
     assert free_gpus(objs) == {"gpu-node-1": 6}
@@ -90,7 +106,11 @@ def test_overlay_weights_only_the_interactive_alias() -> None:
     assert batch["litellm_params"]["api_base"] == STABLE_BASE and "weight" not in batch["litellm_params"]
     # Every other model is carried over untouched (Helm replaces the whole list).
     assert {m["model_name"] for m in models} == {
-        "qwen3.8-27b", "qwen3.8-27b-batch", "gpt-oss-120b", "bge-m3", "qwen3.8-27b-candidate"
+        "qwen3.8-27b",
+        "qwen3.8-27b-batch",
+        "gpt-oss-120b",
+        "bge-m3",
+        "qwen3.8-27b-candidate",
     }
 
 
@@ -117,11 +137,13 @@ def test_overlay_at_0_only_adds_the_candidate_alias_and_bad_input_fails() -> Non
 
 
 def test_smoke_flags_empty_and_failed_answers() -> None:
-    answers = iter([
-        {"choices": [{"finish_reason": "stop", "message": {"content": "Dodoma, Arusha na Mwanza."}}]},
-        {"choices": [{"finish_reason": "stop", "message": {"content": ""}}]},
-        RuntimeError("HTTP Error 500"),
-    ])
+    answers = iter(
+        [
+            {"choices": [{"finish_reason": "stop", "message": {"content": "Dodoma, Arusha na Mwanza."}}]},
+            {"choices": [{"finish_reason": "stop", "message": {"content": ""}}]},
+            RuntimeError("HTTP Error 500"),
+        ]
+    )
 
     def post(url: str, body: dict, headers: dict) -> dict:
         assert url == "http://x:8000/v1/chat/completions" and headers["Authorization"] == "Bearer k"

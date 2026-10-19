@@ -95,6 +95,9 @@ def test_batch_key_limits_are_sent(gateway: Gateway, tmp_path: Path) -> None:
     batch = FakeLiteLLM.keys["ministry-health-claims-batch"]
     assert batch["models"] == ["qwen3.8-27b-batch"]
     assert batch["rpm_limit"] == 30 and batch["max_parallel_requests"] == 4
+    # The gateway also checks the team's models, so the batch alias must be there too.
+    health = next(t for t in FakeLiteLLM.teams.values() if t["team_alias"] == "ministry-health")
+    assert health["models"] == ["qwen3.8-27b", "gpt-oss-120b", "bge-m3", "qwen3.8-27b-batch"]
 
 
 def test_key_cannot_escape_its_tenant() -> None:

@@ -14,9 +14,9 @@ runtimeClassName: nvidia
 gfd:
   enabled: true
 
-# NFD is a dependency of GFD; run it, but only where GPUs exist.
-nfd:
-  enableNodeFeatureApi: true
+# NFD is a sub-chart dependency of GFD (registry.k8s.io/nfd/node-feature-discovery
+# v0.19.0). Its worker runs on every node; the chart's default worker
+# tolerations already cover the nvidia.com/gpu=present:NoSchedule taint.
 
 # One whole GPU per nvidia.com/gpu request. MIG partitioning ("single" or
 # "mixed") is a per-site decision; see Chapter 4.3.

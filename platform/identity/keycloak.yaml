@@ -44,7 +44,7 @@ spec:
       value: "true"
     - name: event-metrics-user-enabled
       value: "true"
-    # Keycloak checks no external service, but say so explicitly.
+    # Structured JSON logs, so Loki (Chapter 9) can query fields.
     - name: log-console-output
       value: json
   resources:

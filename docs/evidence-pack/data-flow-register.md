@@ -13,7 +13,7 @@ Every flow below stays inside the enclave. No row has a destination outside it, 
 | F3 | RAG API (`rag`) | LiteLLM | Prompts with retrieved document chunks, user subject | HTTP in-cluster | No | `rag-api` key; ACL filter before generation (Ch 8) |
 | F4 | LiteLLM | vLLM (`inference`) | Prompts, completions | HTTP in-cluster | No (KV cache in GPU memory only) | `model-servers-ingress` policy (Ch 5) |
 | F5 | LiteLLM | Audit sink (`ai-gateway`) | Full request and response, key alias, team, end user | HTTP in-cluster, bearer token | Yes, after redaction: `audit.events`, `audit.event_content` | `audit-sink-ingress` L7 policy; redaction; RLS (Ch 10) |
-| F6 | LiteLLM | Langfuse (`monitoring`) | Traces: timings, model, token counts, prompt and response | OTLP in-cluster | Yes: Langfuse database | In-enclave `LANGFUSE_HOST` (Ch 9). Review whether traces need content at all |
+| F6 | LiteLLM | Langfuse (`monitoring`) | Traces: timings, model, token counts, prompt and response | OTLP in-cluster | Yes: Langfuse (ClickHouse, S3 events), unredacted | In-enclave `LANGFUSE_HOST`; 30-day nightly deletion (Ch 9). Review whether traces need content at all |
 | F7 | Ingestion job | Qdrant, TEI (`rag`) | Document text, embeddings, ACL labels | HTTP in-cluster | Yes: Qdrant collection per tenant | Per-tenant collections (Ch 8) |
 | F8 | All pods | Loki (`monitoring`) | Application logs | In-cluster | Yes | Applications must not log prompts; the audit sink logs counts only |
 | F9 | Falco | falcosidekick, Alertmanager | Alert text: pod, process, command line, destination IP | In-cluster | Alertmanager memory; Loki | Command lines can contain arguments: treat alerts as confidential |
@@ -27,8 +27,8 @@ Every flow below stays inside the enclave. No row has a destination outside it, 
 | `audit.event_content` | Prompts and responses | Yes, before storage (e-mail, phone, NIDA, card, IBAN) | Per tenant, content clock | Tenant data-protection officer |
 | Open WebUI volume | Chat history, uploads | No | Tenant policy; user-deletable | Tenant |
 | Qdrant | Document chunks | No (source documents are the tenant's records) | Life of the source document | Tenant data owner |
-| Langfuse | Traces | No | Set in Ch 9 values; keep short | Platform team |
-| Loki | Logs | Must contain no content | Ch 9 values | Platform team |
+| Langfuse | Traces: full prompts and responses, end-user e-mail | No | 30 days, CronJob `langfuse-retention` (Ch 9; `retention-policy.md`) | Platform team |
+| Loki | Logs | Must contain no content; e-mail masked by Alloy | 30 days, Loki compactor (Ch 9) | Platform team |
 
 ## Review
 

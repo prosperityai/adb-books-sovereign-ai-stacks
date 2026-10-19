@@ -2,8 +2,10 @@
 # Open WebUI 0.12.3 (chart 17.0.0) — one release per tenant
 # Book: Sovereign AI Stacks, Chapters 6 and 7
 #   helm upgrade --install chat-ministry-health oci://harbor.enclave.internal/charts/open-webui \
-#     --version 17.0.0 -n chat-ui -f platform/chat-ui/open-webui-values.yaml \
-#     --set-string extraEnvVars[0].value=ministry-health   # see TENANT below
+#     --version 17.0.0 -n chat-ui -f platform/chat-ui/open-webui-values.yaml
+# This file is the ministry-health release. For another tenant, copy it and
+# replace "ministry-health" throughout: TENANT, the three Secret names and
+# OAUTH_CLIENT_ID.
 #
 # Secrets (per tenant, created by provision_keys.py and Chapter 7):
 #   chat-<tenant>-gateway-key   key "key"            LiteLLM virtual key
@@ -27,6 +29,11 @@ enableOpenaiApi: true
 openaiBaseApiUrl: http://litellm.ai-gateway.svc:4000/v1
 openaiApiKeyExistingSecret: chat-ministry-health-gateway-key
 openaiApiKeyExistingSecretKey: key
+
+# Kyverno's require-limits (Chapter 7) rejects a chat-ui pod without these.
+resources:
+  requests: {cpu: 500m, memory: 1Gi}
+  limits: {memory: 2Gi}
 
 persistence:
   enabled: true
@@ -91,6 +98,10 @@ extraEnvVars:
   - name: OAUTH_CLIENT_SECRET
     valueFrom:
       secretKeyRef: {name: chat-ministry-health-oidc, key: client-secret}
+  # The realm requires PKCE (S256) on every client; Open WebUI sends no
+  # code_challenge unless told to, and Keycloak then refuses the login.
+  - name: OAUTH_CODE_CHALLENGE_METHOD
+    value: S256
   - name: ENABLE_OAUTH_ROLE_MANAGEMENT
     value: "true"
   - name: OAUTH_ROLES_CLAIM

@@ -45,6 +45,10 @@ STABLE_BASE=http://$DEPLOY.$NS.svc:8000/v1
 CANARY_BASE=http://$CANARY.$NS.svc:8000/v1
 EVAL_JOB=eval-$MODEL-candidate
 VALUES=$REPO/platform/gateway/litellm-values.yaml
+# Chapter 9's overlay (metrics server, Prometheus callback) is part of the
+# reviewed gateway configuration, exactly as in airgap/zarf.yaml. Without it
+# every gateway change here would switch off the metrics the SLO alerts use.
+OBS_VALUES=$REPO/platform/observability/litellm-values.observability.yaml
 GATEWAY_CHART=${GATEWAY_CHART:-oci://harbor.enclave.internal/charts/litellm-helm}
 GATEWAY_VERSION=${GATEWAY_VERSION:-1.106.0}
 WORK=$(mktemp -d)
@@ -69,7 +73,7 @@ model_ref() {  # model_ref <deployment>
 # gateway 1-99 = plus that share of the production alias
 # gateway 100  = everything on the stable backend moved to the canary
 gateway() {
-  local weight=$1 files=(-f "$VALUES")
+  local weight=$1 files=(-f "$VALUES" -f "$OBS_VALUES")
   if [ "$weight" != "off" ]; then
     python3 "$HERE/canary.py" overlay --values "$VALUES" --alias "$ALIAS" \
       --stable-base "$STABLE_BASE" --canary-base "$CANARY_BASE" --weight "$weight" > "$WORK/overlay.yaml"
@@ -78,7 +82,7 @@ gateway() {
   else
     log "gateway: back to the reviewed values (no canary)"
   fi
-  # Only the reviewed values file (plus the generated overlay) is applied, so
+  # Only the reviewed values files (plus the generated overlay) are applied, so
   # "off" is exactly the configuration in Git. The chart's config checksum
   # rolls the gateway pods one at a time.
   helm upgrade litellm "$GATEWAY_CHART" --version "$GATEWAY_VERSION" -n ai-gateway "${files[@]}" \

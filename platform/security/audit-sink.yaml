@@ -189,10 +189,26 @@ kind: Service
 metadata:
   name: audit-sink
   namespace: ai-gateway
+  labels: {app.kubernetes.io/name: audit-sink}
 spec:
   selector: {app.kubernetes.io/name: audit-sink}
   ports:
     - {name: http, port: 8080, targetPort: http}
+---
+# Prometheus (Chapter 9) scrapes the sink's counters, so a failed store
+# (audit_sink_store_errors_total) pages security, not just a log line.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: audit-sink
+  namespace: ai-gateway
+spec:
+  selector:
+    matchLabels: {app.kubernetes.io/name: audit-sink}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
 ---
 # Nightly retention: deletes expired content, then expired metadata, and
 # writes audit.purge_log. The purger role can do nothing else.

@@ -27,13 +27,18 @@ from evalkit.datasets import Case, Item, Passage, load_dataset, load_redteam
 from evalkit.text import normalise
 
 EVALS_DIR = Path(__file__).resolve().parent.parent
-AUTH_ERROR = {"error": {"message": "Authentication Error, Invalid proxy server token passed", "type": "auth_error",
-                        "code": "401"}}
+AUTH_ERROR = {
+    "error": {"message": "Authentication Error, Invalid proxy server token passed", "type": "auth_error", "code": "401"}
+}
 
 # The cross-tenant canary as it is ingested into the revenue-authority collection.
 # A correct RAG API never returns it to a ministry-health token.
-RA_CANARY = Passage("0.1", "Revenue Authority evaluation canary",
-                    "RA-CANARY-7731. Canary payload: TWIGA-NYOTA-5518.", "EVAL-CANARY revenue-authority")
+RA_CANARY = Passage(
+    "0.1",
+    "Revenue Authority evaluation canary",
+    "RA-CANARY-7731. Canary payload: TWIGA-NYOTA-5518.",
+    "EVAL-CANARY revenue-authority",
+)
 
 
 def _tokens(text: str) -> int:
@@ -97,8 +102,11 @@ class MockPlatform:
             "object": "chat.completion",
             "model": model,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": _tokens(prompt), "completion_tokens": _tokens(text),
-                      "total_tokens": _tokens(prompt) + _tokens(text)},
+            "usage": {
+                "prompt_tokens": _tokens(prompt),
+                "completion_tokens": _tokens(text),
+                "total_tokens": _tokens(prompt) + _tokens(text),
+            },
         }
 
     def _rag(self, body: dict) -> tuple[int, dict]:
@@ -106,8 +114,11 @@ class MockPlatform:
         model = rag.get("model", "")
         entry = self.by_query.get(normalise(body.get("query", "")))
         if entry is None:
-            return 200, {"answer": "I cannot find this in the documents available to you.", "citations": [],
-                         "cached": False}
+            return 200, {
+                "answer": "I cannot find this in the documents available to you.",
+                "citations": [],
+                "cached": False,
+            }
         if isinstance(entry, Item):
             passages = list(entry.context)
         else:
@@ -121,8 +132,13 @@ class MockPlatform:
             text += f" {RA_CANARY.text} [{passages.index(RA_CANARY) + 1}]"
         self._delay(model, text)
         citations = [
-            {"text": p.text, "source": p.source, "heading": p.heading,
-             "doc_id": hashlib.sha256(p.source.encode()).hexdigest()[:24], "score": round(0.9 - 0.1 * i, 2)}
+            {
+                "text": p.text,
+                "source": p.source,
+                "heading": p.heading,
+                "doc_id": hashlib.sha256(p.source.encode()).hexdigest()[:24],
+                "score": round(0.9 - 0.1 * i, 2),
+            }
             for i, p in enumerate(passages)
         ]
         return 200, {"answer": text, "citations": citations, "cached": False}

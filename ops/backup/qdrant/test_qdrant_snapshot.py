@@ -171,7 +171,10 @@ def test_backup_uploads_every_node_and_writes_manifest_last(s3: S3, nodes: list[
     m = backup(cfg(tmp_path), s3, nodes, now=datetime(2026, 10, 19, 1, 30, tzinfo=UTC))
     assert m["run"] == "20261019T0130Z" and m["created_at"] == "2026-10-19T01:30:00Z"
     assert [(i["node"], i["collection"]) for i in m["items"]] == [
-        (0, "ministry-health"), (0, "revenue-authority"), (1, "ministry-health"), (1, "revenue-authority")
+        (0, "ministry-health"),
+        (0, "revenue-authority"),
+        (1, "ministry-health"),
+        (1, "revenue-authority"),
     ]
     key = "/qdrant/qdrant/20261019T0130Z/node-1/ministry-health/ministry-health-snap.snapshot"
     assert FakeS3.objects[key].startswith(b"node-1:ministry-health:")  # reassembled from multipart
@@ -182,7 +185,10 @@ def test_backup_uploads_every_node_and_writes_manifest_last(s3: S3, nodes: list[
 def test_verify_detects_a_corrupted_object(s3: S3, nodes: list[Qdrant], tmp_path: Path) -> None:
     backup(cfg(tmp_path), s3, nodes, now=datetime(2026, 10, 19, 1, 30, tzinfo=UTC))
     assert verify(cfg(tmp_path), s3, None) == {
-        "run": "20261019T0130Z", "created_at": "2026-10-19T01:30:00Z", "verified": 4, "corrupt": []
+        "run": "20261019T0130Z",
+        "created_at": "2026-10-19T01:30:00Z",
+        "verified": 4,
+        "corrupt": [],
     }
     key = "/qdrant/qdrant/20261019T0130Z/node-0/revenue-authority/revenue-authority-snap.snapshot"
     FakeS3.objects[key] = b"bit rot"

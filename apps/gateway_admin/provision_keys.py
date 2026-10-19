@@ -68,10 +68,20 @@ class Gateway:
         return self._call("POST", "/key/generate", body)
 
 
+def team_models(tenant: dict) -> list[str]:
+    """The tenant's models plus any key-only alias (e.g. the -batch model).
+
+    LiteLLM checks the TEAM's model list on every request, as well as the
+    key's, so a key-only alias must also be on the team or its calls fail.
+    """
+    extra = {m for key in tenant.get("keys", []) for m in key.get("models", [])} - set(tenant["models"])
+    return list(tenant["models"]) + sorted(extra)
+
+
 def team_body(tenant: dict) -> dict:
     return {
         "team_alias": tenant["id"],
-        "models": tenant["models"],
+        "models": team_models(tenant),
         "rpm_limit": tenant["rpm_limit"],
         "tpm_limit": tenant["tpm_limit"],
         "metadata": {"tenant_name": tenant["name"], "managed_by": "provision_keys.py"},

@@ -84,8 +84,10 @@ def test_every_language_has_the_same_parallel_items():
     for i in ITEMS:
         by_lang.setdefault(i.lang, []).append(i)
     assert set(by_lang) == {"sw", "en", "ar"}
-    shape = {lang: [(i.id[3:], i.kind, tuple(p.section for p in i.context), i.cite) for i in v]
-             for lang, v in by_lang.items()}
+    shape = {
+        lang: [(i.id[3:], i.kind, tuple(p.section for p in i.context), i.cite) for i in v]
+        for lang, v in by_lang.items()
+    }
     assert shape["sw"] == shape["en"] == shape["ar"]
     assert all(len(v) >= 12 for v in by_lang.values())
 
@@ -128,7 +130,8 @@ def test_system_prompt_matches_the_rag_service():
         pytest.skip("RAG service source not present (image build)")
     tree = ast.parse(api.read_text(encoding="utf-8"))
     prompt = next(
-        ast.literal_eval(n.value) for n in tree.body
+        ast.literal_eval(n.value)
+        for n in tree.body
         if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "SYSTEM_PROMPT"
     )
     assert prompt == SYSTEM_PROMPT

@@ -12,6 +12,21 @@ apiVersion: v1alpha1
 kind: KubeProxyConfig
 enabled: false
 ---
+# The three control-plane nodes also run the platform services: Ceph, the
+# databases, the gateway, Keycloak, Qdrant and the observability stack.
+# Talos taints control-plane nodes NoSchedule by default; remove the taint,
+# and the label that would hide these nodes from Cilium's L2 load-balancer
+# announcements. GPU nodes keep their own taint, so only GPU workloads run
+# there.
+apiVersion: v1alpha1
+kind: KubeNodeConfig
+taints:
+  node-role.kubernetes.io/control-plane:
+    $patch: delete
+labels:
+  node.kubernetes.io/exclude-from-external-load-balancers:
+    $patch: delete
+---
 # Shared API endpoint without an external load balancer.
 apiVersion: v1alpha1
 kind: Layer2VIPConfig

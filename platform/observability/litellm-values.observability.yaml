@@ -14,7 +14,7 @@
 # an inference worker, and the main port keeps its default of requiring a
 # virtual key for /metrics (require_auth_for_metrics_endpoint is true in 1.106).
 # Port 4001 has no auth, so only Prometheus may reach it
-# (network/scrape-targets.yaml).
+# (network/policies.yaml).
 metricsServer:
   enabled: true
   port: 4001

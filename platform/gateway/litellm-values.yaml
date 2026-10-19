@@ -34,6 +34,12 @@ db:
 
 migrationJob:
   enabled: true
+  # Kyverno's require-limits (Chapter 7) rejects pods without memory limits,
+  # and the chart sets none on this Job: without these, every later
+  # `helm upgrade` stops at its pre-upgrade hook.
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {memory: 1Gi}
   hooks:
     argocd:
       enabled: false
@@ -116,9 +122,16 @@ proxy_config:
     num_retries: 1
     allowed_fails: 3
     cooldown_time: 30
+    # Deployment-level rpm (qwen3.8-27b-batch) is only a routing weight under
+    # simple-shuffle unless this check enforces it.
+    optional_pre_call_checks: ["enforce_model_rate_limits"]
     # If the primary model is down, answer with the larger one rather than fail.
     fallbacks:
       - qwen3.8-27b: [gpt-oss-120b]
+    # ...but never for an over-long prompt. Without this entry LiteLLM retries a
+    # context-window error on the generic fallback, hiding the client's bug.
+    context_window_fallbacks:
+      - qwen3.8-27b: []
 
   litellm_settings:
     drop_params: true

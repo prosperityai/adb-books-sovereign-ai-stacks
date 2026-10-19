@@ -221,7 +221,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--rto-target", type=parse_duration, default=parse_duration("60m"))
     p.add_argument("--rpo-target", type=parse_duration, default=parse_duration("15m"))
     p.add_argument(
-        "--rpo-for", action="append", default=[], metavar="COMPONENT=DURATION",
+        "--rpo-for",
+        action="append",
+        default=[],
+        metavar="COMPONENT=DURATION",
         help="per-component RPO target, e.g. chat-ui=26h (repeatable)",
     )
     p.add_argument("--markdown", type=Path)

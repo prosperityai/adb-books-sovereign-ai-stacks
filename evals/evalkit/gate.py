@@ -42,8 +42,16 @@ def evaluate(candidate: dict, criteria: dict, baseline: dict | None = None) -> l
         same = {k: v["sha256"] for k, v in candidate["datasets"].items()} == {
             k: v["sha256"] for k, v in baseline["datasets"].items()
         }
-        out.append(GateResult("same-datasets", "all", "match" if same else "differ", "match", same,
-                              "" if same else "baseline answered different questions: re-run the baseline"))
+        out.append(
+            GateResult(
+                "same-datasets",
+                "all",
+                "match" if same else "differ",
+                "match",
+                same,
+                "" if same else "baseline answered different questions: re-run the baseline",
+            )
+        )
 
     min_items = int(criteria.get("min_items_per_language", 1))
     for lang, floors in criteria.get("languages", {}).items():
@@ -66,8 +74,16 @@ def evaluate(candidate: dict, criteria: dict, baseline: dict | None = None) -> l
                 if bs is None or bs.get(metric) is None or st.get(metric) is None:
                     continue
                 drop = round(bs[metric] - st[metric], 4)
-                out.append(GateResult(f"regression-{metric}", lang, drop, max_drop, drop <= max_drop,
-                                      f"baseline {bs[metric]:.3f} -> candidate {st[metric]:.3f}"))
+                out.append(
+                    GateResult(
+                        f"regression-{metric}",
+                        lang,
+                        drop,
+                        max_drop,
+                        drop <= max_drop,
+                        f"baseline {bs[metric]:.3f} -> candidate {st[metric]:.3f}",
+                    )
+                )
 
     total = cs["overall"]["items"] + (cs["redteam"]["cases"] or 0)
     errors = cs["overall"]["errors"] + sum(1 for r in candidate["results"] if r["kind"] == "redteam" and r["error"])
@@ -80,9 +96,16 @@ def evaluate(candidate: dict, criteria: dict, baseline: dict | None = None) -> l
     rt = cs["redteam"]
     if "min_pass_rate" in rt_crit:
         rate = rt["pass_rate"] if rt["pass_rate"] is not None else 0.0
-        out.append(GateResult("redteam-pass-rate", "all", rate, rt_crit["min_pass_rate"],
-                              rt["cases"] > 0 and rate >= rt_crit["min_pass_rate"],
-                              ", ".join(f["id"] for f in rt["failures"])))
+        out.append(
+            GateResult(
+                "redteam-pass-rate",
+                "all",
+                rate,
+                rt_crit["min_pass_rate"],
+                rt["cases"] > 0 and rate >= rt_crit["min_pass_rate"],
+                ", ".join(f["id"] for f in rt["failures"]),
+            )
+        )
     for cat in rt_crit.get("required_categories", []):
         n = rt["per_category"].get(cat, {}).get("cases", 0)
         out.append(GateResult("redteam-category", cat, n, 1, n >= 1, "" if n else "category not exercised"))
@@ -92,8 +115,16 @@ def evaluate(candidate: dict, criteria: dict, baseline: dict | None = None) -> l
         b, c = baseline["summary"]["overall"]["mean_cost"], cs["overall"]["mean_cost"]
         if b > 0:
             inc = round((c - b) / b, 4)
-            out.append(GateResult("cost-increase", "all", inc, cost["max_increase"], inc <= cost["max_increase"],
-                                  f"{b:.6f} -> {c:.6f} {cost.get('currency', '')} per answer"))
+            out.append(
+                GateResult(
+                    "cost-increase",
+                    "all",
+                    inc,
+                    cost["max_increase"],
+                    inc <= cost["max_increase"],
+                    f"{b:.6f} -> {c:.6f} {cost.get('currency', '')} per answer",
+                )
+            )
 
     judge_min = criteria.get("judge", {}).get("min_mean")
     if judge_min is not None:

@@ -9,7 +9,7 @@
 # Usage:   ./push_model_oci.sh <model-dir> <registry>/<project>
 #   e.g.   ./push_model_oci.sh /import/models/qwen3.8-27b-fp8 harbor.enclave.internal/models
 #
-# Log in first:  oras login harbor.enclave.internal -u 'robot$models-push' --password-stdin
+# Log in first:  oras login harbor.enclave.internal -u 'robot$import-push' --password-stdin
 # Lab only:       PLAIN_HTTP=1 for a throwaway registry without TLS. Harbor in
 #                 the enclave always serves TLS from the enclave CA.
 #

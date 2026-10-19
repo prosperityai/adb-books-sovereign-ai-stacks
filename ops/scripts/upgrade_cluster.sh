@@ -124,7 +124,8 @@ preflight() {
       if in_harbor "$img"; then log "  in Harbor: $img"; else log "  MISSING:   $img"; missing=1; fi
     done
   else
-    # The exact list talosctl will pre-pull: control-plane images, kubelet, etcd, CoreDNS.
+    # Every image talosctl lists for this version: a superset of what upgrade-k8s
+    # pre-pulls (it also names Flannel and kube-proxy, which Cilium replaces).
     while read -r img; do
       [ -n "$img" ] || continue
       if in_harbor "$img"; then log "  in Harbor: $img"; else log "  MISSING:   $img"; missing=1; fi

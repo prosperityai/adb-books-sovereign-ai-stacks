@@ -56,3 +56,6 @@ kube_node_status_allocatable gauge
 
 # CloudNativePG 1.30.1
 cnpg_collector_up gauge
+
+# Audit sink (Chapter 10, apps/audit/src/audit/sink.py)
+audit_sink_store_errors_total counter

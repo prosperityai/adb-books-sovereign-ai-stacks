@@ -26,6 +26,17 @@ Content can never outlive its metadata. The sink refuses a policy that says othe
 4. Every run writes `audit.purge_log`: one row per table and tenant, or a single `*` row when nothing expired. The evidence pack exports the last 90 days (`audit-db/purge-log-90d.csv`). A missing night is a finding.
 5. Backups (Chapter 12) keep their own copies for their own retention window, so a purged record is gone from every copy only once the last backup taken before the purge expires. Write that window here (`backup retention: ___ days`) and state it to the regulator; don't let them discover it.
 
+## Prompt text outside the audit log
+
+The audit log isn't the only store that holds prompt text. Two operational stores from Chapter 9 keep data for a fixed 30-day window. Tell the regulator about them before they ask.
+
+| Store | What it holds | Redacted? | Window | Enforced by | Who can read it |
+|---|---|---|---|---|---|
+| Langfuse traces (`monitoring`) | Full prompt and response, model, timings, end-user e-mail | **No** | 30 days | CronJob `langfuse-retention`, nightly, through the Langfuse API (deletion completes asynchronously) | Platform engineers with a Langfuse login |
+| Loki logs (`monitoring`) | Application logs, which must not contain prompts | E-mail addresses masked by Alloy | 30 days (`retention_period: 720h`) | Loki compactor | Grafana `platform-admins` |
+
+The Langfuse window is a mitigation, not redaction: for up to 31 days a trace holds exactly what the audit sink redacts. If a tenant's DPO won't accept that, shorten the window (the job refuses less than three days) or remove the `langfuse_otel` callback from the gateway. Record either decision in the change log below.
+
 ## Changing a period
 
 - **Longer:** applies to records collected after the change. Existing records keep their stamp.

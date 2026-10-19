@@ -8,6 +8,10 @@
 # Usage:   ./bootstrap.sh cluster.env            # full build
 #          ./bootstrap.sh cluster.env render     # only render configs (no nodes touched)
 #
+# One-machine lab: set LAB_SINGLE_NODE=1 and one address in CONTROL_PLANE_IPS,
+# leave GPU_WORKER_IPS empty. The node gets the control-plane AND GPU patches
+# (installer from SCHEMATIC_GPU) and no GPU taint, so it runs everything.
+#
 # Steps:
 #   1. generate cluster secrets once (kept in out/secrets.yaml)
 #   2. render patches from cluster.env
@@ -27,8 +31,11 @@ OUT="$HERE/out"
 
 # shellcheck source=/dev/null
 source "$ENV_FILE"
+LAB_SINGLE_NODE=${LAB_SINGLE_NODE:-0}
+REQUIRED_GPU=GPU_WORKER_IPS
+[ "$LAB_SINGLE_NODE" = "1" ] && REQUIRED_GPU=""
 for v in CLUSTER_NAME CLUSTER_VIP CLUSTER_ENDPOINT KUBERNETES_VERSION TALOS_VERSION CONTROL_PLANE_IPS \
-         GPU_WORKER_IPS VIP_INTERFACE INSTALL_DISK_SELECTOR NTP_SERVER DNS_SERVER HARBOR_HOST \
+         $REQUIRED_GPU VIP_INTERFACE INSTALL_DISK_SELECTOR NTP_SERVER DNS_SERVER HARBOR_HOST \
          HARBOR_PULL_USER HARBOR_PULL_PASSWORD_FILE ENCLAVE_CA_FILE SCHEMATIC_CONTROL_PLANE SCHEMATIC_GPU; do
   [ -n "${!v:-}" ] || { echo "cluster.env is missing $v" >&2; exit 1; }
 done
@@ -64,13 +71,19 @@ chmod 600 "$OUT"/patches/*.yaml
 # --- 3. generate and validate ------------------------------------------------
 # --with-cluster-discovery=false: the default discovery service is a public
 # endpoint (discovery.talos.dev) that the enclave can never reach.
+# In the one-machine lab the control-plane node is also the GPU node: it gets
+# the GPU patch too, applied last, so its installer image is the GPU schematic.
+CP_PATCHES=(--config-patch-control-plane @"$OUT/patches/controlplane.yaml")
+if [ "$LAB_SINGLE_NODE" = "1" ]; then
+  CP_PATCHES+=(--config-patch-control-plane @"$OUT/patches/gpu-worker.yaml")
+fi
 talosctl gen config "$CLUSTER_NAME" "$CLUSTER_ENDPOINT" \
   --with-secrets "$OUT/secrets.yaml" \
   --kubernetes-version "$KUBERNETES_VERSION" \
   --with-cluster-discovery=false \
   --with-docs=false --with-examples=false \
   --config-patch @"$OUT/patches/common.yaml" \
-  --config-patch-control-plane @"$OUT/patches/controlplane.yaml" \
+  "${CP_PATCHES[@]}" \
   --config-patch-worker @"$OUT/patches/gpu-worker.yaml" \
   --output "$OUT" --force
 talosctl validate --config "$OUT/controlplane.yaml" --mode metal
@@ -81,7 +94,11 @@ chmod 600 "$OUT/controlplane.yaml" "$OUT/worker.yaml" "$OUT/talosconfig"
 
 # --- 4. apply to nodes in maintenance mode -----------------------------------
 read -r -a CP <<< "$CONTROL_PLANE_IPS"
-read -r -a GPU <<< "$GPU_WORKER_IPS"
+read -r -a GPU <<< "${GPU_WORKER_IPS:-}"
+if [ "$LAB_SINGLE_NODE" = "1" ] && { [ "${#CP[@]}" -ne 1 ] || [ "${#GPU[@]}" -ne 0 ]; }; then
+  echo "LAB_SINGLE_NODE=1 needs exactly one CONTROL_PLANE_IPS address and no GPU_WORKER_IPS" >&2
+  exit 1
+fi
 for ip in "${CP[@]}"; do
   talosctl apply-config --insecure --nodes "$ip" --file "$OUT/controlplane.yaml"
 done

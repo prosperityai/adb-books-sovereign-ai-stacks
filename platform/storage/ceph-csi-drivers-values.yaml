@@ -1,0 +1,62 @@
+# =============================================================================
+# Ceph-CSI drivers chart 1.1.0 values (release "ceph-csi-drivers", namespace
+# rook-ceph): the RBD and CephFS drivers that provision and mount Ceph volumes
+# Book: Sovereign AI Stacks, Chapter 4
+#
+# Since Rook v1.18 the CSI drivers run under the ceph-csi-operator. The
+# rook-ceph chart installs the operator and its CRDs; THIS chart creates the
+# OperatorConfig and Driver resources. Without it no PVC ever binds.
+# Starts from Rook v1.21.0's deploy/charts/ceph-csi-drivers/values.yaml; the
+# driver names must match the provisioners in Rook's StorageClasses.
+# =============================================================================
+operatorConfig:
+  namespace: rook-ceph
+  driverSpecDefaults:
+    # Image list written by the rook-ceph chart (csi.* image values), so the
+    # pulls go to the mirrored names Harbor already holds.
+    imageSet:
+      name: rook-csi-operator-image-set-configmap
+    nodePlugin:
+      priorityClassName: system-node-critical
+      # The node plugin mounts volumes on every node that runs a pod with a
+      # PVC. vLLM's model caches live on ceph-block PVCs on the GPU nodes, so
+      # the plugin must tolerate the GPU taint set by bootstrap.sh.
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+    controllerPlugin:
+      priorityClassName: system-cluster-critical
+      # Two provisioners, so a node drain doesn't stop new PVCs being created.
+      replicas: 2
+
+drivers:
+  rbd:
+    enabled: true
+    name: rook-ceph.rbd.csi.ceph.com
+    # The chart renders an explicit (empty) toleration list on every Driver,
+    # so the default above is repeated here rather than relied on.
+    nodePlugin:
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+    # No CSI snapshots: Chapter 12 backs up volumes off-cluster instead.
+    snapshotPolicy: none
+  cephfs:
+    enabled: true
+    name: rook-ceph.cephfs.csi.ceph.com
+    # The chart renders an explicit (empty) toleration list on every Driver,
+    # so the default above is repeated here rather than relied on.
+    nodePlugin:
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+    snapshotPolicy: none
+  nfs:
+    enabled: false
+    name: rook-ceph.nfs.csi.ceph.com
+  nvmeof:
+    enabled: false
+    name: rook-ceph.nvmeof.csi.ceph.com

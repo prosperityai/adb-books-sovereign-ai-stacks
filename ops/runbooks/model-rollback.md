@@ -28,7 +28,7 @@ $ ops/scripts/upgrade_model.sh status qwen3-8-27b
 $ ops/scripts/upgrade_model.sh rollback qwen3-8-27b
 ```
 
-This puts the gateway back on the reviewed `litellm-values.yaml`, removing both the weighted canary and the `qwen3.8-27b-candidate` alias, then deletes the canary Deployment, Service and cache volume. The stable model never changed, so there's nothing else to verify beyond step 4.
+This puts the gateway back on the reviewed values files (`litellm-values.yaml` plus Chapter 9's observability overlay), removing both the weighted canary and the `qwen3.8-27b-candidate` alias, then deletes the canary Deployment, Service and cache volume. The stable model never changed, so there's nothing else to verify beyond step 4.
 
 ## 3. Roll back a promotion (15–40 minutes)
 
