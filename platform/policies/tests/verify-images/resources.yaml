@@ -1,0 +1,54 @@
+# Test resources for verify-images-test.yaml (run through run.sh).
+# Book: Sovereign AI Stacks, Chapter 10
+#
+# run.sh pushes three copies of one image to the lab registry:
+#   demo-signed    signed with the enclave admission key  -> admitted
+#   demo-unsigned  no signature                          -> rejected
+#   demo-rogue     signed with a different key           -> rejected
+# The init-container case lives in resources-init.yaml (see run.sh).
+# Pods name the images by their UPSTREAM names, exactly as Helm charts do;
+# route-through-harbor rewrites them before the signature check.
+apiVersion: v1
+kind: Pod
+metadata: {name: good-signed, namespace: rag}
+spec:
+  containers:
+    - name: app
+      image: docker.io/library/demo-signed:1.0
+      resources:
+        requests: {memory: 64Mi}
+        limits: {memory: 64Mi}
+---
+apiVersion: v1
+kind: Pod
+metadata: {name: bad-unsigned, namespace: rag}
+spec:
+  containers:
+    - name: app
+      image: docker.io/library/demo-unsigned:1.0
+      resources:
+        requests: {memory: 64Mi}
+        limits: {memory: 64Mi}
+---
+apiVersion: v1
+kind: Pod
+metadata: {name: bad-rogue-key, namespace: rag}
+spec:
+  containers:
+    - name: app
+      image: docker.io/library/demo-rogue:1.0
+      resources:
+        requests: {memory: 64Mi}
+        limits: {memory: 64Mi}
+---
+# Rewrite only: a ghcr.io image is routed to the Harbor mirror path.
+apiVersion: v1
+kind: Pod
+metadata: {name: rewrite-ghcr, namespace: ai-gateway}
+spec:
+  containers:
+    - name: litellm
+      image: ghcr.io/berriai/litellm:v1.106.0
+      resources:
+        requests: {memory: 2Gi}
+        limits: {memory: 4Gi}

@@ -1,0 +1,112 @@
+# =============================================================================
+# Loki 3.6.12 (chart loki 7.3.0) values — release "loki", namespace monitoring
+# Book: Sovereign AI Stacks, Chapter 9
+#
+# Single-binary mode, three replicas, chunks and index in the in-cluster Ceph
+# object store (bucket "loki-chunks", see object-store.yaml). Single binary is
+# Grafana's recommended mode up to roughly 20 GB of logs a day; a platform of
+# this size writes well under that.
+#
+# Expects in monitoring: Secret "loki-chunks" (AWS_ACCESS_KEY_ID and
+# AWS_SECRET_ACCESS_KEY), written by the ObjectBucketClaim of the same name.
+# =============================================================================
+deploymentMode: SingleBinary
+
+loki:
+  image:
+    # The chart's default tag lags its appVersion; pin the patched release.
+    tag: 3.6.12
+  # One Loki tenant. Agencies are not Loki tenants: these are platform logs,
+  # read by platform engineers. Tenant data lives in the audit sink (Ch 10).
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 3
+  storage:
+    type: s3
+    bucketNames:
+      chunks: loki-chunks
+      ruler: loki-chunks
+    s3:
+      endpoint: rook-ceph-rgw-enclave-objects.rook-ceph.svc:80
+      region: us-east-1          # Ceph ignores it; the S3 client requires one
+      accessKeyId: ${AWS_ACCESS_KEY_ID}
+      secretAccessKey: ${AWS_SECRET_ACCESS_KEY}
+      s3ForcePathStyle: true
+      # In-cluster HTTP. Node-to-node traffic is WireGuard-encrypted by
+      # Cilium (Chapter 4), so the bytes on the wire are still ciphertext.
+      insecure: true
+  schemaConfig:
+    configs:
+      - from: "2026-10-01"
+        store: tsdb
+        object_store: s3
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+  # Logs are personal data too (user e-mails appear in gateway access logs).
+  # Keep 30 days, enforced by the compactor, and say so in the retention
+  # policy (Chapter 10's evidence pack).
+  limits_config:
+    retention_period: 720h
+    reject_old_samples: true
+    reject_old_samples_max_age: 168h
+    max_query_lookback: 720h
+    volume_enabled: true
+  compactor:
+    retention_enabled: true
+    delete_request_store: s3
+  # Loki reports usage to stats.grafana.org by default.
+  analytics:
+    reporting_enabled: false
+
+singleBinary:
+  replicas: 3
+  extraArgs:
+    - -config.expand-env=true
+  extraEnvFrom:
+    - secretRef:
+        name: loki-chunks
+  persistence:
+    enabled: true
+    storageClass: ceph-block
+    size: 20Gi
+  resources:
+    requests: {cpu: 500m, memory: 2Gi}
+    limits: {memory: 4Gi}
+
+# Single-binary mode: every scalable component off.
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+
+# Grafana and Alloy talk to the loki Service directly; the nginx gateway
+# would be one more image to mirror and patch for no gain in single-binary mode.
+gateway:
+  enabled: false
+
+# The memcached caches default to 8 GB (chunks) and 1 GB (results) of RAM.
+# At this volume Ceph serves chunks fast enough; turn them on if query
+# latency says otherwise.
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+
+# The canary DaemonSet and the helm test pod are lab conveniences.
+lokiCanary:
+  enabled: false
+test:
+  enabled: false
+
+monitoring:
+  serviceMonitor:
+    enabled: true
+
+# No Loki ruler rules are shipped as ConfigMaps, so no rules sidecar image.
+sidecar:
+  rules:
+    enabled: false

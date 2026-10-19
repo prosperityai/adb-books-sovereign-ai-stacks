@@ -1,0 +1,186 @@
+# =============================================================================
+# Langfuse 4.56.0 (chart langfuse 2.1.5) values — release "langfuse",
+# namespace monitoring. LLM traces from the gateway, kept inside the enclave.
+# Book: Sovereign AI Stacks, Chapter 9
+#
+# Stores and where they come from:
+#   Postgres    CloudNativePG cluster langfuse-db (langfuse-db.yaml)
+#   ClickHouse  ClickHouseCluster + KeeperCluster rendered by this chart and
+#               run by clickhouse-operator 0.0.8 (clickhouse-operator-values.yaml)
+#   Valkey      bundled valkey-io/valkey subchart, valkey/valkey:8.0.11
+#   S3          Ceph RGW bucket langfuse-blobs (object-store.yaml)
+#
+# Secrets this release expects in monitoring (created in Chapter 9):
+#   langfuse-secrets  keys salt, encryption-key, nextauth-secret
+#   langfuse-init     keys public-key, secret-key (the same pair as LiteLLM's
+#                     LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY), admin-email,
+#                     admin-password
+#   langfuse-db-app   created by CloudNativePG
+#   langfuse-blobs    created by the ObjectBucketClaim
+#   langfuse-tls      TLS certificate for langfuse.enclave.internal
+# =============================================================================
+langfuse:
+  # Pinned rather than auto-generated: a restore (Chapter 12) needs the same
+  # salt and key, or every API key and encrypted secret stops working.
+  salt:
+    secretKeyRef: {name: langfuse-secrets, key: salt}
+  encryptionKey:
+    secretKeyRef: {name: langfuse-secrets, key: encryption-key}
+  nextauth:
+    url: https://langfuse.enclave.internal
+    secret:
+      secretKeyRef: {name: langfuse-secrets, key: nextauth-secret}
+
+  features:
+    # The chart default is true: usage statistics to Langfuse's servers.
+    telemetryEnabled: false
+    signUpDisabled: true
+    experimentalFeaturesEnabled: false
+
+  logging:
+    level: info
+    format: json
+
+  # Images are on Docker Hub as well as docker.langfuse.com. Use the registry
+  # Harbor already mirrors (Chapter 3) instead of adding another upstream.
+  web:
+    image:
+      repository: docker.io/langfuse/langfuse
+    replicas: 2
+    resources:
+      requests: {cpu: 500m, memory: 1Gi}
+      limits: {memory: 2Gi}
+  worker:
+    image:
+      repository: docker.io/langfuse/langfuse-worker
+    replicas: 2
+    resources:
+      requests: {cpu: 500m, memory: 1Gi}
+      limits: {memory: 2Gi}
+  image:
+    tag: "4.56.0"
+    pullPolicy: IfNotPresent
+
+  serviceAccount:
+    automountServiceAccountToken: false
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+
+  # Headless initialisation: the organisation, the project LiteLLM writes
+  # into, its API key pair and the first admin exist on first start. No one
+  # clicks through a sign-up page, and the keys are the ones already in
+  # LiteLLM's litellm-callbacks Secret.
+  additionalEnv:
+    - {name: LANGFUSE_INIT_ORG_ID, value: enclave}
+    - {name: LANGFUSE_INIT_ORG_NAME, value: Enclave Platform}
+    - {name: LANGFUSE_INIT_PROJECT_ID, value: llm-gateway}
+    - {name: LANGFUSE_INIT_PROJECT_NAME, value: LLM gateway}
+    - name: LANGFUSE_INIT_PROJECT_PUBLIC_KEY
+      valueFrom: {secretKeyRef: {name: langfuse-init, key: public-key}}
+    - name: LANGFUSE_INIT_PROJECT_SECRET_KEY
+      valueFrom: {secretKeyRef: {name: langfuse-init, key: secret-key}}
+    - name: LANGFUSE_INIT_USER_EMAIL
+      valueFrom: {secretKeyRef: {name: langfuse-init, key: admin-email}}
+    - {name: LANGFUSE_INIT_USER_NAME, value: Platform Admin}
+    - name: LANGFUSE_INIT_USER_PASSWORD
+      valueFrom: {secretKeyRef: {name: langfuse-init, key: admin-password}}
+
+  ingress:
+    enabled: true
+    className: cilium
+    hosts:
+      - host: langfuse.enclave.internal
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      enabled: true
+      secretName: langfuse-tls
+
+# --- Postgres: external (CloudNativePG) ---------------------------------------
+postgresql:
+  deploy: false
+  host: langfuse-db-rw.monitoring.svc
+  port: 5432
+  auth:
+    username: langfuse
+    database: langfuse
+    existingSecret: langfuse-db-app
+    secretKeys:
+      userPasswordKey: password
+
+# --- Valkey: bundled ----------------------------------------------------------
+redis:
+  deploy: true
+  image:
+    tag: "8.0.11"
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1Gi}
+  dataStorage:
+    enabled: true
+    requestedSize: 8Gi
+    className: ceph-block
+
+# --- ClickHouse: operator-managed ---------------------------------------------
+# One ClickHouse replica on a Ceph RBD volume: Ceph already keeps three
+# copies of every block, and traces are diagnostic data. If the node dies the
+# pod restarts elsewhere with the same volume; LiteLLM keeps serving while
+# trace export retries. Go to 2 replicas and 3 Keepers if traces become an
+# SLA of their own.
+clickhouse:
+  deploy: true
+  cluster:
+    replicas: 1
+    image:
+      tag: "26.4"
+    storage:
+      size: 100Gi
+      className: ceph-block
+    resources:
+      requests: {cpu: "1", memory: 4Gi}
+      limits: {memory: 8Gi}
+    logger:
+      level: information
+  keeper:
+    enabled: true
+    replicas: 1
+    image:
+      tag: "26.4"
+    storage:
+      size: 10Gi
+      className: ceph-block
+    resources:
+      requests: {cpu: 250m, memory: 256Mi}
+      limits: {memory: 1Gi}
+    logger:
+      level: information
+
+# --- S3: Ceph RGW -------------------------------------------------------------
+s3:
+  deploy: false
+  storageProvider: s3
+  bucket: langfuse-blobs
+  region: us-east-1
+  endpoint: http://rook-ceph-rgw-enclave-objects.rook-ceph.svc:80
+  forcePathStyle: true
+  accessKeyId:
+    secretKeyRef: {name: langfuse-blobs, key: AWS_ACCESS_KEY_ID}
+  secretAccessKey:
+    secretKeyRef: {name: langfuse-blobs, key: AWS_SECRET_ACCESS_KEY}
+  eventUpload:
+    prefix: events/
+  # Batch exports would make another full copy of prompts and responses.
+  batchExport:
+    enabled: false
+  # Media uploads hand the BROWSER a presigned URL to the S3 endpoint, which
+  # here is an in-cluster name no browser can reach. The gateway sends no
+  # media, so switch it off rather than leave a feature that cannot work.
+  mediaUpload:
+    enabled: false

@@ -1,0 +1,82 @@
+# =============================================================================
+# evals.yml — test the harness and prove the gate bites, on every change to it
+# Book: Sovereign AI Stacks, Chapter 11
+#
+# Runs on the connected side (GitHub) against the mock platform only: no model,
+# no GPU, no enclave. Real acceptance runs happen inside the enclave as the
+# Kubernetes Job in platform/evals/eval-job.yaml.
+# Pinned: actions/checkout v7.0.1, actions/setup-python v7.0.0,
+# actions/upload-artifact v7.0.2, Python 3.13, ruff 0.17.1.
+# =============================================================================
+name: evals
+
+on:
+  pull_request:
+    paths: ["evals/**", "apps/rag/src/rag/api.py", ".github/workflows/evals.yml"]
+  push:
+    branches: [main]
+    paths: ["evals/**", "apps/rag/src/rag/api.py", ".github/workflows/evals.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  harness:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: evals
+    env:
+      # Fake credentials for the mock. Real keys never exist outside the enclave.
+      EVAL_GATEWAY_KEY: sk-ci-mock-not-a-secret
+      EVAL_RAG_TOKEN: ci-mock-rag-token
+      MOCK: http://127.0.0.1:8089
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install
+        run: python -m pip install ".[test]" ruff==0.17.1
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Unit and gate tests
+        run: python -m pytest
+
+      - name: Start the mock gateway and RAG API
+        run: |
+          python -m evalkit.mock --port 8089 > mock.log 2>&1 &
+          for _ in $(seq 1 20); do curl -fsS "$MOCK/healthz" && exit 0; sleep 0.5; done
+          cat mock.log; exit 1
+
+      - name: Run baseline and candidate
+        run: |
+          python harness.py run --model qwen3.8-27b --gateway-url "$MOCK" --rag-url "$MOCK" \
+            --out results/baseline --quiet
+          python harness.py run --model qwen3.8-27b-candidate --gateway-url "$MOCK" --rag-url "$MOCK" \
+            --out results/candidate --quiet
+
+      - name: Gate must ACCEPT the baseline against itself
+        run: python harness.py gate --baseline results/baseline/run.json --candidate results/baseline/run.json --out results/self
+
+      - name: Gate must REJECT the Swahili regression
+        run: |
+          set +e
+          python harness.py gate --baseline results/baseline/run.json --candidate results/candidate/run.json \
+            --out results/gate
+          code=$?
+          set -e
+          cat results/gate/gate.md >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" -ne 1 ]; then echo "expected exit 1 (REJECT), got $code"; exit 1; fi
+
+      - name: Keep the scorecards
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: eval-scorecards
+          path: evals/results/
+          retention-days: 14

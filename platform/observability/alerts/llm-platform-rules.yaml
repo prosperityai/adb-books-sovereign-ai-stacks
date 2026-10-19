@@ -1,0 +1,324 @@
+# =============================================================================
+# llm-platform-rules.yaml — recording rules and alerts for the LLM platform
+# Book: Sovereign AI Stacks, Chapter 9
+# Evaluated by Prometheus v3.15.0 (kube-prometheus-stack 92.10.1, release kps).
+#
+# Every alert carries: severity (critical pages, warning tickets, info shows
+# on dashboards), team (platform or security, used by Alertmanager routing),
+# and summary, description and runbook_url annotations.
+# Unit tests: alerts/tests/llm-platform-rules.test.yaml (alerts/test-rules.sh).
+# =============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: llm-platform-rules
+  namespace: monitoring
+spec:
+  groups:
+    # --- Latency SLO ----------------------------------------------------------
+    # Chapter 5's SLO: p95 time-to-first-token <= 3 s and p95 time per output
+    # token <= 100 ms. 95% of requests within 3 s means a 5% error budget.
+    - name: llm-latency.rules
+      interval: 30s
+      rules:
+        - record: model:vllm_ttft_seconds:p95_5m
+          expr: histogram_quantile(0.95, sum by (le, model_name) (rate(vllm:time_to_first_token_seconds_bucket[5m])))
+        - record: model:vllm_itl_seconds:p95_5m
+          expr: histogram_quantile(0.95, sum by (le, model_name) (rate(vllm:inter_token_latency_seconds_bucket[5m])))
+        - record: model:vllm_queue_seconds:p95_5m
+          expr: histogram_quantile(0.95, sum by (le, model_name) (rate(vllm:request_queue_time_seconds_bucket[5m])))
+        # Fraction of gateway requests whose first token took longer than 3 s.
+        # The gateway's buckets include 3.0 exactly (prometheus_latency_buckets),
+        # so this is a count, not an interpolation.
+        - record: model_group:litellm_ttft_slow:ratio_rate5m
+          expr: |
+            1 - (
+              sum by (model_group) (rate(litellm_llm_api_time_to_first_token_metric_bucket{le="3.0"}[5m]))
+              /
+              sum by (model_group) (rate(litellm_llm_api_time_to_first_token_metric_count[5m]))
+            )
+        - record: model_group:litellm_ttft_slow:ratio_rate30m
+          expr: |
+            1 - (
+              sum by (model_group) (rate(litellm_llm_api_time_to_first_token_metric_bucket{le="3.0"}[30m]))
+              /
+              sum by (model_group) (rate(litellm_llm_api_time_to_first_token_metric_count[30m]))
+            )
+        - record: model_group:litellm_ttft_slow:ratio_rate1h
+          expr: |
+            1 - (
+              sum by (model_group) (rate(litellm_llm_api_time_to_first_token_metric_bucket{le="3.0"}[1h]))
+              /
+              sum by (model_group) (rate(litellm_llm_api_time_to_first_token_metric_count[1h]))
+            )
+        - record: model_group:litellm_ttft_slow:ratio_rate6h
+          expr: |
+            1 - (
+              sum by (model_group) (rate(litellm_llm_api_time_to_first_token_metric_bucket{le="3.0"}[6h]))
+              /
+              sum by (model_group) (rate(litellm_llm_api_time_to_first_token_metric_count[6h]))
+            )
+
+    - name: llm-latency.alerts
+      rules:
+        # Multi-window burn rate: the long window proves it is sustained, the
+        # short window proves it is still happening (so it resolves quickly).
+        - alert: LlmTtftSloBurnFast
+          expr: |
+            model_group:litellm_ttft_slow:ratio_rate1h > (6 * 0.05)
+            and
+            model_group:litellm_ttft_slow:ratio_rate5m > (6 * 0.05)
+          for: 2m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "{{ $labels.model_group }}: {{ $value | humanizePercentage }} of requests miss the 3 s first-token SLO"
+            description: >-
+              Over the last hour more than 30% of streamed requests to {{ $labels.model_group }} waited
+              longer than 3 s for the first token (budget: 5%). Check vLLM queue depth, KV-cache usage and
+              GPU clocks on the GPU fleet dashboard before scaling anything.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/LlmTtftSloBurn
+        - alert: LlmTtftSloBurnSlow
+          expr: |
+            model_group:litellm_ttft_slow:ratio_rate6h > (2 * 0.05)
+            and
+            model_group:litellm_ttft_slow:ratio_rate30m > (2 * 0.05)
+          for: 15m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "{{ $labels.model_group }}: first-token SLO budget burning at twice the sustainable rate"
+            description: >-
+              More than 10% of requests to {{ $labels.model_group }} have missed the 3 s first-token
+              target over six hours. Slow burns that repeat at the same time of day point at load
+              patterns or at the environment (cooling, power), not at the model.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/LlmTtftSloBurn
+        - alert: VllmInterTokenLatencyHigh
+          expr: model:vllm_itl_seconds:p95_5m > 0.1
+          for: 15m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "{{ $labels.model_name }}: p95 inter-token latency {{ $value | humanizeDuration }} (SLO 100 ms)"
+            description: >-
+              Decode is slow for {{ $labels.model_name }}. With a normal queue this is a GPU-side
+              problem: clocks, thermal throttling, or a neighbour on the same card.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/VllmInterTokenLatencyHigh
+
+    # --- Capacity and queue depth --------------------------------------------
+    - name: llm-capacity.alerts
+      rules:
+        - alert: VllmQueueBacklog
+          expr: avg_over_time(vllm:num_requests_waiting[5m]) > 8
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "{{ $labels.model_name }} on {{ $labels.Hostname }}: {{ $value | humanize }} requests queued"
+            description: >-
+              Requests are waiting for a scheduler slot (--max-num-seqs) or KV-cache blocks. If one
+              key dominates, the gateway limits are wrong (Chapter 6); if load is broad, the model needs
+              another replica (Chapter 2's sizing).
+            runbook_url: https://runbooks.enclave.internal/llm-platform/VllmQueueBacklog
+        - alert: VllmKvCacheSaturated
+          expr: max_over_time(vllm:kv_cache_usage_perc[10m]) > 0.95
+          for: 15m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "{{ $labels.model_name }}: KV cache {{ $value | humanizePercentage }} full"
+            description: A full KV cache forces queueing and preemption. See vllm:num_preemptions_total.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/VllmKvCacheSaturated
+        - alert: VllmModelServerDown
+          expr: up{namespace="inference"} == 0
+          for: 3m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Model server {{ $labels.pod }} is not answering /metrics"
+            description: >-
+              Prometheus cannot scrape {{ $labels.pod }}. The gateway will fall back to gpt-oss-120b for
+              qwen3.8-27b traffic, at higher latency, until it returns.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/VllmModelServerDown
+        - alert: GatewayKeyRateLimited
+          expr: sum by (team_alias, api_key_alias) (rate(litellm_proxy_failed_requests_metric_total{exception_status="429"}[10m])) > 0.5
+          for: 15m
+          labels:
+            severity: info
+            team: platform
+          annotations:
+            summary: "Key {{ $labels.api_key_alias }} ({{ $labels.team_alias }}) is being rate-limited"
+            description: >-
+              Expected for batch keys. For a chat-ui key it means users see errors: raise the limit in
+              tenants.yaml through review, or find out why the tenant's traffic changed.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/GatewayKeyRateLimited
+
+    # --- GPU health ------------------------------------------------------------
+    - name: gpu-health.alerts
+      rules:
+        # DCGM_FI_DEV_THERMAL_VIOLATION counts nanoseconds spent throttled for
+        # thermal reasons, so rate()/1e9 is the fraction of time throttled.
+        - alert: GpuThermalThrottling
+          expr: rate(DCGM_FI_DEV_THERMAL_VIOLATION[5m]) / 1e9 > 0.05
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "GPU {{ $labels.gpu }} on {{ $labels.Hostname }} thermally throttled {{ $value | humanizePercentage }} of the time"
+            description: >-
+              The SM clock is being reduced to protect the card. Throughput and latency on this GPU drop
+              with it. Check inlet temperature and fans before blaming the model.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/GpuThermalThrottling
+        # Several hot GPUs at once is a room problem, not a card problem.
+        - alert: GpuFleetOverheating
+          expr: count(DCGM_FI_DEV_GPU_TEMP > 83) >= 4
+          for: 10m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "{{ $value }} GPUs above 83 °C at the same time"
+            description: >-
+              Multiple GPUs across servers are hot together. Suspect cooling (CRAC/CRAH, containment
+              doors, blocked tiles) and call facilities now; the platform cannot fix this itself.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/GpuFleetOverheating
+        - alert: GpuHardwareSlowdown
+          expr: increase(DCGM_EXP_CLOCK_EVENTS_TOTAL{clock_event=~"hw_slowdown|hw_thermal|hw_power_brake"}[10m]) > 0
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "GPU {{ $labels.gpu }} on {{ $labels.Hostname }}: hardware clock event {{ $labels.clock_event }}"
+            description: >-
+              The board itself cut clocks (hardware thermal limit, power brake or slowdown), usually by
+              half or more. This is the last protection before shutdown.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/GpuHardwareSlowdown
+        # XIDs that mean the GPU or its memory is failing, not the application:
+        # 48 double-bit ECC, 63/64 row remapping, 74 NVLink, 79 fallen off the
+        # bus, 92 high single-bit ECC rate, 94/95 contained/uncontained ECC,
+        # 119/120 GSP firmware errors.
+        - alert: GpuXidCritical
+          expr: increase(DCGM_EXP_XID_ERRORS_TOTAL{xid=~"48|63|64|74|79|92|94|95|119|120"}[10m]) > 0
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "XID {{ $labels.xid }} on GPU {{ $labels.gpu }} ({{ $labels.Hostname }})"
+            description: >-
+              A hardware-class XID error. Cordon the node, drain the model server, and open a hardware
+              case with the serial number from DCGM. Do not just restart the pod.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/GpuXidCritical
+        - alert: GpuXidOther
+          expr: increase(DCGM_EXP_XID_ERRORS_TOTAL{xid!~"48|63|64|74|79|92|94|95|119|120"}[10m]) > 0
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "XID {{ $labels.xid }} on GPU {{ $labels.gpu }} ({{ $labels.Hostname }})"
+            description: >-
+              Usually an application-side fault (13 and 31 are the common ones: illegal memory access
+              or MMU fault in a CUDA kernel). Correlate with the vLLM pod's logs in Loki.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/GpuXidOther
+        - alert: GpuRowRemapFailure
+          expr: DCGM_FI_DEV_ROW_REMAP_FAILURE > 0
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "GPU {{ $labels.gpu }} on {{ $labels.Hostname }} could not remap a failing memory row"
+            description: The card has exhausted its spare memory rows. It needs replacing.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/GpuRowRemapFailure
+        - alert: DcgmExporterDown
+          expr: up{namespace="gpu", job=~".*dcgm-exporter"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "No GPU telemetry from {{ $labels.instance }}"
+            description: Every GPU alert above is blind on this node until the exporter is back.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/DcgmExporterDown
+
+    # --- Audit trail -----------------------------------------------------------
+    # A gap in the audit trail is a compliance incident (Chapter 10), so these
+    # route to security as well as the platform team.
+    - name: audit.alerts
+      rules:
+        - alert: AuditSinkUnavailable
+          expr: kube_deployment_status_replicas_available{namespace="ai-gateway", deployment="audit-sink"} < 1
+          for: 2m
+          labels:
+            severity: critical
+            team: security
+          annotations:
+            summary: The audit sink has no available replicas
+            description: >-
+              LiteLLM keeps serving requests, but the generic_api callback cannot deliver audit events.
+              Every request answered now is a request nobody can account for later.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/AuditSinkUnavailable
+        - alert: AuditSinkMissing
+          expr: absent(kube_deployment_status_replicas_available{namespace="ai-gateway", deployment="audit-sink"})
+          for: 10m
+          labels:
+            severity: critical
+            team: security
+          annotations:
+            summary: The audit-sink Deployment does not exist
+            description: Someone deleted or renamed it. Restore it from Git before anything else.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/AuditSinkUnavailable
+        - alert: AuditDatabaseDown
+          expr: max by (cluster) (cnpg_collector_up{namespace="ai-gateway", cluster="audit-db"}) < 1
+          for: 2m
+          labels:
+            severity: critical
+            team: security
+          annotations:
+            summary: The audit database (CNPG cluster audit-db) is down
+            description: The audit sink cannot persist events without it.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/AuditDatabaseDown
+        - alert: GatewayCallbackFailures
+          expr: sum by (callback_name) (increase(litellm_callback_logging_failures_metric_total[10m])) > 0
+          labels:
+            severity: warning
+            team: security
+          annotations:
+            summary: "LiteLLM callback {{ $labels.callback_name }} failed {{ $value | humanize }} times in 10 minutes"
+            description: >-
+              A logging callback (audit or tracing) raised errors. Check the gateway logs in Loki:
+              {namespace="ai-gateway", app="litellm"} |= "{{ $labels.callback_name }}".
+            runbook_url: https://runbooks.enclave.internal/llm-platform/GatewayCallbackFailures
+
+    # --- The telemetry pipeline itself -----------------------------------------
+    - name: observability.alerts
+      rules:
+        - alert: LangfuseWebUnavailable
+          expr: kube_deployment_status_replicas_available{namespace="monitoring", deployment="langfuse-web"} < 1
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: Langfuse is not accepting traces
+            description: >-
+              LiteLLM's langfuse_otel exporter is dropping spans. Requests are unaffected; trace
+              history has a gap from now until Langfuse recovers.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/LangfuseWebUnavailable
+        - alert: GatewayMetricsMissing
+          expr: absent(up{namespace="ai-gateway", job="litellm-metrics"} == 1)
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: No gateway metrics are being scraped
+            description: >-
+              Tenant dashboards and every SLO alert above depend on them. Check the litellm-metrics
+              Service on port 4001 and the litellm-metrics-from-prometheus network policy.
+            runbook_url: https://runbooks.enclave.internal/llm-platform/GatewayMetricsMissing

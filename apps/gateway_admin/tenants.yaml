@@ -36,7 +36,9 @@ tenants:
   # Platform-internal consumers
   - id: platform
     name: Platform services
-    models: [qwen3.8-27b, gpt-oss-120b, bge-m3]
+    # qwen3.8-27b-candidate exists only while Chapter 12 stages an upgrade;
+    # the eval-harness key needs it to run the promotion gate (Chapter 11).
+    models: [qwen3.8-27b, qwen3.8-27b-candidate, gpt-oss-120b, bge-m3]
     rpm_limit: 600
     tpm_limit: 1000000
     keys:

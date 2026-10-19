@@ -1,0 +1,26 @@
+# Audit sink for the AI gateway. Book: Sovereign AI Stacks, Chapter 10
+[project]
+name = "sovereign-audit-sink"
+version = "1.0.0"
+description = "Redacting, append-only audit sink for LiteLLM generic_api events (Sovereign AI Stacks, Chapter 10)"
+requires-python = ">=3.13"
+dependencies = [
+  "fastapi==0.146.0",
+  "uvicorn==0.54.0",
+  "psycopg[binary]==3.3.6",
+  "psycopg-pool==3.3.3",
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1", "httpx==0.28.1"]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+addopts = "-q"

@@ -33,7 +33,9 @@ spec:
     topologyKey: kubernetes.io/hostname
     podAntiAffinityType: required
   monitoring:
-    enablePodMonitor: false   # switched on in Chapter 9
+    # Deprecated in CloudNativePG 1.30; Chapter 9 scrapes the exporter with
+    # its own PodMonitor (platform/observability/scrape/monitors.yaml).
+    enablePodMonitor: false
   resources:
     requests: {cpu: "1", memory: 2Gi}
     limits: {memory: 4Gi}

@@ -1,0 +1,126 @@
+# =============================================================================
+# falco-rules.yaml — runtime detections specific to the sovereign AI platform
+# Book: Sovereign AI Stacks, Chapter 10 (threats T1, T2, T11)
+# Falco 0.45.0 (chart 9.2.0), modern eBPF driver, container plugin 0.7.x
+#
+# Loaded after Falco's bundled falco_rules.yaml (from /etc/falco/rules.d, via
+# the ConfigMap that kustomization.yaml generates). Validate offline with:
+#   falco -V platform/security/falco-rules.yaml
+#
+# Every rule fires on the ATTEMPT, including attempts the kernel or Cilium
+# refused: a blocked connect() or a write to a read-only volume is exactly
+# the signal an incident responder needs, and a successful one is too late.
+# =============================================================================
+- required_engine_version: 0.57.0
+
+# --- Platform vocabulary ------------------------------------------------------
+# Namespaces whose workloads hold prompts, documents or model weights.
+- list: sovereign_data_namespaces
+  items: [inference, ai-gateway, chat-ui, rag, evals]
+
+# Everything a pod may legitimately connect to: node network and enclave
+# services (10.20.0.0/16), pod CIDR and service CIDR (Talos defaults).
+# Keep this in step with platform/cilium/enclave-egress-baseline.yaml.
+- list: sovereign_enclave_networks
+  items: ['"10.20.0.0/16"', '"10.244.0.0/16"', '"10.96.0.0/12"', '"127.0.0.0/8"']
+
+# Where model weights live in every model-server pod (Chapter 5).
+- list: sovereign_model_paths
+  items: [/models/]
+
+# The init container that downloads and hash-checks weights (oci_pull.py).
+- list: sovereign_model_writers
+  items: [model-fetch]
+
+- macro: sovereign_data_pod
+  condition: (container.id != host and k8s.ns.name in (sovereign_data_namespaces))
+
+# Workloads that legitimately use the Kubernetes API from these namespaces:
+# CloudNativePG instance managers (litellm-db, audit-db) read their token.
+# Images are matched by suffix because Kyverno rewrites them to Harbor paths.
+- macro: sovereign_api_client
+  condition: (container.image.repository endswith cloudnative-pg/postgresql)
+
+# Reviewed, expected shells. PostgreSQL runs archive_command and
+# restore_command through /bin/sh, and CloudNativePG points both at its
+# instance manager; WAL archiving (Chapter 12) would otherwise alert every
+# few seconds. Append further exceptions in a later rules file, with a ticket.
+- macro: sovereign_allowed_shell
+  condition: (proc.pname = postgres and proc.cmdline contains "/controller/manager")
+
+# --- 1. Interactive shells in inference and data pods -------------------------
+- rule: Shell in sovereign data pod
+  desc: >
+    A shell started inside a pod that holds prompts, documents or model
+    weights. None of these images need a shell at runtime; kubectl exec into
+    them is an incident until someone shows the change ticket.
+  condition: >
+    spawned_process and sovereign_data_pod and shell_procs
+    and not sovereign_allowed_shell
+  output: >
+    Shell in sovereign data pod (user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name
+    container=%container.name image=%container.image.repository shell=%proc.name
+    parent=%proc.pname cmdline=%proc.cmdline tty=%proc.tty)
+  priority: WARNING
+  tags: [sovereign_ai, T11, container, shell, mitre_execution]
+
+# --- 2. Model weight tampering -------------------------------------------------
+- rule: Model weights opened for writing
+  desc: >
+    Any open-for-write, rename or delete under the model directory by anything
+    other than the model-fetch init container. vLLM mounts /models read-only,
+    so a successful attempt means the mount changed; a failed one means
+    something tried.
+  condition: >
+    sovereign_data_pod
+    and ((evt.type in (open, openat, openat2) and evt.is_open_write=true
+          and fd.name pmatch (sovereign_model_paths))
+         or (evt.type in (rename, renameat, renameat2, unlink, unlinkat)
+             and fs.path.name pmatch (sovereign_model_paths)))
+    and not container.name in (sovereign_model_writers)
+  output: >
+    Model weights write attempt (ns=%k8s.ns.name pod=%k8s.pod.name
+    container=%container.name proc=%proc.name cmdline=%proc.cmdline
+    file=%fd.name path=%fs.path.name evt=%evt.type res=%evt.res)
+  priority: CRITICAL
+  tags: [sovereign_ai, T2, container, filesystem, mitre_impact]
+
+# --- 3. Outbound connection attempts beyond the enclave -----------------------
+# Cilium drops the packet and Hubble records an EGRESS DENIED flow with the
+# pod. Falco sees the same attempt as a syscall and adds what Hubble cannot:
+# the process, its command line and its parent.
+- rule: Connection attempt outside the enclave
+  desc: >
+    A connect() or unconnected UDP send to an address outside the enclave
+    networks, from any container, whether or not it succeeded.
+  condition: >
+    container.id != host
+    and (evt.type = connect
+         or (evt.type in (sendto, sendmsg) and fd.l4proto = udp and fd.connected = false))
+    and (fd.typechar = 4 or fd.typechar = 6)
+    and fd.sip != "0.0.0.0"
+    and not fd.snet in (sovereign_enclave_networks)
+  output: >
+    Egress attempt outside enclave (ns=%k8s.ns.name pod=%k8s.pod.name
+    container=%container.name proc=%proc.name parent=%proc.pname
+    cmdline=%proc.cmdline dest=%fd.sip:%fd.sport proto=%fd.l4proto res=%evt.res)
+  priority: CRITICAL
+  tags: [sovereign_ai, T1, network, mitre_exfiltration]
+
+# --- 4. Service-account token reads --------------------------------------------
+- rule: Service account token read in sovereign data pod
+  desc: >
+    A process in a data namespace opened the Kubernetes service-account token.
+    These workloads run with automountServiceAccountToken false, so the open
+    should fail with ENOENT; any attempt is someone looking for credentials.
+  condition: >
+    evt.type in (open, openat, openat2)
+    and sovereign_data_pod
+    and fd.name startswith /var/run/secrets/kubernetes.io/serviceaccount
+    and not sovereign_api_client
+  output: >
+    Service account token read (ns=%k8s.ns.name pod=%k8s.pod.name
+    container=%container.name proc=%proc.name cmdline=%proc.cmdline
+    file=%fd.name res=%evt.res)
+  priority: WARNING
+  tags: [sovereign_ai, T11, container, credential_access, mitre_credential_access]

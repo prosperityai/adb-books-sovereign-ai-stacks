@@ -89,6 +89,8 @@ spec:
     - fromEndpoints:
         - matchLabels: {k8s:io.kubernetes.pod.namespace: chat-ui}
         - matchLabels: {k8s:io.kubernetes.pod.namespace: monitoring}
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: rag}       # JWKS for token validation (Ch 8)
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: evals}     # harness test-user tokens (Ch 11)
         - matchLabels: {app: keycloak}            # cluster cache between instances
       toPorts:
         - ports:

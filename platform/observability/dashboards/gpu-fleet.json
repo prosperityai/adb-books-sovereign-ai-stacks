@@ -1,0 +1,504 @@
+{
+  "id": null,
+  "uid": "gpu-fleet",
+  "title": "GPU Fleet",
+  "description": "Health, thermals and clocks of every GPU, next to the latency users feel. Book: Sovereign AI Stacks, Chapter 9.",
+  "tags": ["gpu", "dcgm", "sovereign-ai"],
+  "timezone": "browser",
+  "editable": false,
+  "graphTooltip": 1,
+  "schemaVersion": 41,
+  "version": 1,
+  "refresh": "1m",
+  "time": {"from": "now-24h", "to": "now"},
+  "links": [],
+  "annotations": {"list": []},
+  "templating": {
+    "list": [
+      {
+        "name": "Hostname",
+        "label": "GPU server",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": {
+          "query": "label_values(DCGM_FI_DEV_GPU_TEMP, Hostname)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery",
+          "qryType": 1
+        },
+        "definition": "label_values(DCGM_FI_DEV_GPU_TEMP, Hostname)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {"selected": true, "text": ["All"], "value": ["$__all"]},
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Fleet now",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "GPUs reporting",
+      "description": "GPUs the DCGM exporter can see. Compare with the bill of materials; a missing GPU is a hardware or driver fault.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 1, "w": 4, "h": 4},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
+        }
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "none"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(DCGM_FI_DEV_GPU_TEMP{Hostname=~\"$Hostname\"})",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Hottest GPU",
+      "description": "",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 4, "y": 1, "w": 4, "h": 4},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 80},
+              {"color": "red", "value": 85}
+            ]
+          }
+        }
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "none"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(DCGM_FI_DEV_GPU_TEMP{Hostname=~\"$Hostname\"})",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Fleet utilisation",
+      "description": "",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 8, "y": 1, "w": 4, "h": 4},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
+        }
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "none"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg(DCGM_FI_DEV_GPU_UTIL{Hostname=~\"$Hostname\"})",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "GPUs thermally throttled now",
+      "description": "GPUs that spent any of the last 5 minutes throttled for thermal reasons.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 12, "y": 1, "w": 4, "h": 4},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}
+        }
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "none"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(rate(DCGM_FI_DEV_THERMAL_VIOLATION{Hostname=~\"$Hostname\"}[5m]) > 0) or vector(0)",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "XID errors (24h)",
+      "description": "",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 16, "y": 1, "w": 4, "h": 4},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]},
+          "decimals": 0
+        }
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "none"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(DCGM_EXP_XID_ERRORS_TOTAL{Hostname=~\"$Hostname\"}[24h])) or vector(0)",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Model p95 TTFT (worst)",
+      "description": "",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 20, "y": 1, "w": 4, "h": 4},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 2}, {"color": "red", "value": 3}]
+          }
+        }
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "none"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(model:vllm_ttft_seconds:p95_5m)",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Thermals and clocks",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 5, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "GPU temperature",
+      "description": "Look at the shape across servers. One line climbing is a card or a fan; every line climbing together is the room.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 6, "w": 12, "h": 8},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "custom": {"fillOpacity": 10, "showPoints": "never", "thresholdsStyle": {"mode": "line"}},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 83}]}
+        }
+      },
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_GPU_TEMP{Hostname=~\"$Hostname\"}",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "SM clock",
+      "description": "DCGM reports MHz; the panel multiplies by 1e6 for display. A clock that falls while utilisation stays high is throttling.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 12, "y": 6, "w": 12, "h": 8},
+      "fieldConfig": {"defaults": {"unit": "hertz", "custom": {"fillOpacity": 10, "showPoints": "never"}}},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_SM_CLOCK{Hostname=~\"$Hostname\"} * 1e6",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Time spent thermally throttled",
+      "description": "DCGM_FI_DEV_THERMAL_VIOLATION counts nanoseconds throttled; rate()/1e9 is the fraction of wall time.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 14, "w": 12, "h": 8},
+      "fieldConfig": {
+        "defaults": {"unit": "percentunit", "custom": {"fillOpacity": 10, "showPoints": "never"}, "min": 0, "max": 1}
+      },
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(DCGM_FI_DEV_THERMAL_VIOLATION{Hostname=~\"$Hostname\"}[$__rate_interval]) / 1e9",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Clock events by reason (per hour)",
+      "description": "Edge-counted by the exporter from DCGM_FI_DEV_CLOCKS_EVENT_REASONS. gpu_idle is normal; sw_thermal, hw_thermal and hw_slowdown are not.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 12, "y": 14, "w": 12, "h": 8},
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 10, "showPoints": "never"}}},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (clock_event) (increase(DCGM_EXP_CLOCK_EVENTS_TOTAL{Hostname=~\"$Hostname\"}[1h]))",
+          "legendFormat": "{{clock_event}}"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Power draw",
+      "description": "",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 22, "w": 12, "h": 8},
+      "fieldConfig": {"defaults": {"unit": "watt", "custom": {"fillOpacity": 10, "showPoints": "never"}}},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_POWER_USAGE{Hostname=~\"$Hostname\"}",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Memory temperature",
+      "description": "",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 12, "y": 22, "w": 12, "h": 8},
+      "fieldConfig": {"defaults": {"unit": "celsius", "custom": {"fillOpacity": 10, "showPoints": "never"}}},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_MEMORY_TEMP{Hostname=~\"$Hostname\"}",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "row",
+      "title": "Utilisation and memory",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 30, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "GPU utilisation",
+      "description": "",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 31, "w": 8, "h": 8},
+      "fieldConfig": {
+        "defaults": {"unit": "percent", "custom": {"fillOpacity": 10, "showPoints": "never"}, "min": 0, "max": 100}
+      },
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_GPU_UTIL{Hostname=~\"$Hostname\"}",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Tensor pipe active",
+      "description": "Real tensor-core work. GPU utilisation says 'a kernel was running'; this says how much of the hardware it used.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 8, "y": 31, "w": 8, "h": 8},
+      "fieldConfig": {
+        "defaults": {"unit": "percentunit", "custom": {"fillOpacity": 10, "showPoints": "never"}, "min": 0, "max": 1}
+      },
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE{Hostname=~\"$Hostname\"}",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Framebuffer used",
+      "description": "vLLM pre-allocates --gpu-memory-utilization (0.90) at start, so a flat 90% is healthy.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 16, "y": 31, "w": 8, "h": 8},
+      "fieldConfig": {
+        "defaults": {"unit": "percentunit", "custom": {"fillOpacity": 10, "showPoints": "never"}, "min": 0, "max": 1}
+      },
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_FB_USED{Hostname=~\"$Hostname\"} / (DCGM_FI_DEV_FB_USED{Hostname=~\"$Hostname\"} + DCGM_FI_DEV_FB_FREE{Hostname=~\"$Hostname\"})",
+          "legendFormat": "{{Hostname}} GPU {{gpu}} {{pod}}"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "row",
+      "title": "What users feel",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 39, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "p95 time to first token by model",
+      "description": "SLO: 3 s (Chapter 5).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 40, "w": 8, "h": 8},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {"fillOpacity": 10, "showPoints": "never", "thresholdsStyle": {"mode": "line"}},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 3}]}
+        }
+      },
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"refId": "A", "expr": "model:vllm_ttft_seconds:p95_5m", "legendFormat": "{{model_name}}"}]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "p95 inter-token latency by model",
+      "description": "SLO: 100 ms per output token.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 8, "y": 40, "w": 8, "h": 8},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {"fillOpacity": 10, "showPoints": "never", "thresholdsStyle": {"mode": "line"}},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.1}]}
+        }
+      },
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"refId": "A", "expr": "model:vllm_itl_seconds:p95_5m", "legendFormat": "{{model_name}}"}]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Requests running and waiting",
+      "description": "",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 16, "y": 40, "w": 8, "h": 8},
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 10, "showPoints": "never"}}},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (model_name, Hostname) (vllm:num_requests_running{Hostname=~\"$Hostname\"})",
+          "legendFormat": "running {{model_name}} on {{Hostname}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (model_name, Hostname) (vllm:num_requests_waiting{Hostname=~\"$Hostname\"})",
+          "legendFormat": "waiting {{model_name}} on {{Hostname}}"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "row",
+      "title": "Errors",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 48, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "XID errors by code (per hour)",
+      "description": "48, 63, 64, 74, 79, 92, 94, 95, 119 and 120 are hardware-class and page (GpuXidCritical).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 49, "w": 12, "h": 8},
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 10, "showPoints": "never"}}},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (Hostname, gpu, xid) (increase(DCGM_EXP_XID_ERRORS_TOTAL{Hostname=~\"$Hostname\"}[1h]))",
+          "legendFormat": "{{Hostname}} GPU {{gpu}} XID {{xid}}"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Remapped memory rows",
+      "description": "",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 12, "y": 49, "w": 12, "h": 8},
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 10, "showPoints": "never"}}},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_UNCORRECTABLE_REMAPPED_ROWS{Hostname=~\"$Hostname\"}",
+          "legendFormat": "uncorrectable {{Hostname}} GPU {{gpu}}"
+        },
+        {
+          "refId": "B",
+          "expr": "DCGM_FI_DEV_CORRECTABLE_REMAPPED_ROWS{Hostname=~\"$Hostname\"}",
+          "legendFormat": "correctable {{Hostname}} GPU {{gpu}}"
+        }
+      ]
+    }
+  ]
+}

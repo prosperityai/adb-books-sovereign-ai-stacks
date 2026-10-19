@@ -8,8 +8,10 @@
 #   kubectl -n identity create secret generic realm-client-secrets \
 #     --from-literal=chat-ministry-health="$(openssl rand -hex 32)" \
 #     --from-literal=chat-revenue-authority="$(openssl rand -hex 32)" \
-#     --from-literal=rag-ministry-health="$(openssl rand -hex 32)"
-# The same values go into each tenant's chat-<tenant>-oidc Secret in chat-ui.
+#     --from-literal=rag-ministry-health="$(openssl rand -hex 32)" \
+#     --from-literal=grafana="$(openssl rand -hex 32)"
+# The same values go into each tenant's chat-<tenant>-oidc Secret in chat-ui,
+# and the grafana value into Grafana's OAuth secret in monitoring (Chapter 9).
 # =============================================================================
 apiVersion: k8s.keycloak.org/v2beta1
 kind: KeycloakRealmImport
@@ -25,6 +27,8 @@ spec:
       secret: {name: realm-client-secrets, key: chat-revenue-authority}
     RAG_MINISTRY_HEALTH_SECRET:
       secret: {name: realm-client-secrets, key: rag-ministry-health}
+    GRAFANA_SECRET:
+      secret: {name: realm-client-secrets, key: grafana}
   realm:
     realm: government
     displayName: Government AI Platform
@@ -79,6 +83,10 @@ spec:
       - name: revenue-authority-admins
         attributes: {tenant: [revenue-authority]}
         clientRoles: {chat-revenue-authority: [ai-user, ai-admin]}
+      # Platform operations (Chapter 9): Grafana maps these group names to
+      # its Admin and Viewer roles. Membership grants no chat-UI access.
+      - name: platform-admins
+      - name: finance-chargeback
     clients:
       - clientId: chat-ministry-health
         name: AI Assistant - Ministry of Health
@@ -220,6 +228,40 @@ spec:
               full.path: "false"
               access.token.claim: "true"
               id.token.claim: "true"
+      # --- Grafana (Chapter 9): operators and chargeback viewers -------------
+      - clientId: grafana
+        name: Platform dashboards
+        protocol: openid-connect
+        publicClient: false
+        secret: ${GRAFANA_SECRET}
+        standardFlowEnabled: true
+        implicitFlowEnabled: false
+        directAccessGrantsEnabled: false
+        serviceAccountsEnabled: false
+        redirectUris:
+          - https://grafana.enclave.internal/login/generic_oauth
+        webOrigins:
+          - https://grafana.enclave.internal
+        attributes:
+          pkce.code.challenge.method: S256
+          post.logout.redirect.uris: https://grafana.enclave.internal/
+        protocolMappers:
+          # Grafana's role_attribute_path reads plain group names.
+          - name: groups
+            protocol: openid-connect
+            protocolMapper: oidc-group-membership-mapper
+            config:
+              claim.name: groups
+              full.path: "false"
+              id.token.claim: "true"
+              access.token.claim: "true"
+              userinfo.token.claim: "true"
+          - name: audience
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: grafana
+              access.token.claim: "true"
       # --- service clients for tenant applications calling the RAG API -------
       # Client-credentials only; the tenant and clearance are fixed per client.
       - clientId: rag-ministry-health

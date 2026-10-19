@@ -1,0 +1,304 @@
+# =============================================================================
+# audit-sink.yaml — the audit database, the sink, its retention job and the
+# network rules around them
+# Book: Sovereign AI Stacks, Chapter 10 (threats T8, T9)
+# Operator: CloudNativePG 1.30.1   Image: PostgreSQL 18.6 (standard: pgaudit)
+# Sink image built from apps/audit (Dockerfile): ghcr.io/prosperityai/audit-sink:1.0.0
+#
+# Create before applying (Chapter 10 shows the commands):
+#   ConfigMap audit-db-schema   key 001_init.sql   (apps/audit/migrations)
+#   Secret audit-db-writer      basic-auth, username audit_writer
+#   Secret audit-db-purger      basic-auth, username audit_purger
+#   Secret audit-sink-token     key token (the same value LiteLLM sends in
+#                               GENERIC_LOGGER_HEADERS, Secret litellm-callbacks)
+# =============================================================================
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: audit-db
+  namespace: ai-gateway
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.6-standard-trixie
+  # No postgres superuser password is ever created: nobody logs in as the
+  # superuser, so nobody can bypass the grants this database depends on.
+  enableSuperuserAccess: false
+  postgresql:
+    synchronous:
+      method: any
+      number: 1
+    parameters:
+      log_statement: ddl
+      # Reads of the audit log are themselves audited (object audit via the
+      # audit_access_logged role, see 001_init.sql). Parameters are not
+      # logged, so the log never holds the values that were queried for.
+      pgaudit.log: "role, ddl"
+      pgaudit.role: audit_access_logged
+      pgaudit.log_relation: "on"
+      pgaudit.log_parameter: "off"
+      pgaudit.log_catalog: "off"
+  bootstrap:
+    initdb:
+      database: audit
+      # Owns the schema; its generated Secret (audit-db-app) is break-glass
+      # only and is mounted by no workload.
+      owner: audit_owner
+      postInitApplicationSQLRefs:
+        configMapRefs:
+          - name: audit-db-schema
+            key: 001_init.sql
+  managed:
+    roles:
+      - name: audit_writer
+        ensure: present
+        login: true
+        connectionLimit: 20
+        passwordSecret:
+          name: audit-db-writer
+      - name: audit_purger
+        ensure: present
+        login: true
+        connectionLimit: 2
+        passwordSecret:
+          name: audit-db-purger
+  storage:
+    storageClass: ceph-block
+    size: 50Gi
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+  monitoring:
+    # Deprecated in CloudNativePG 1.30; Chapter 9's PodMonitor scrapes it.
+    enablePodMonitor: false
+  resources:
+    requests: {cpu: 500m, memory: 1Gi}
+    limits: {memory: 2Gi}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: audit-sink-config
+  namespace: ai-gateway
+data:
+  # Days to keep metadata (who, when, which key and model) and content
+  # (redacted prompt and answer). Example values: agree each tenant's figures
+  # with its data-protection officer and record them in
+  # docs/evidence-pack/retention-policy.md.
+  AUDIT_RETENTION_DAYS: >-
+    {"*": {"metadata": 730, "content": 180},
+     "ministry-health": {"metadata": 2555, "content": 365},
+     "revenue-authority": {"metadata": 3650, "content": 365},
+     "platform": {"metadata": 365, "content": 90}}
+  # Keys allowed to vouch for the end user (purpose: chat-ui in tenants.yaml).
+  # Any other key's X-OpenWebUI-User-Email is recorded but marked unverified.
+  AUDIT_TRUSTED_USER_KEYS: chat-ministry-health,chat-revenue-authority
+  AUDIT_DB_HOST: audit-db-rw.ai-gateway.svc
+  AUDIT_DB_NAME: audit
+  AUDIT_DB_SSLMODE: verify-full
+  AUDIT_DB_SSLROOTCERT: /etc/audit-db-ca/ca.crt
+  AUDIT_MAX_BODY_BYTES: "67108864"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: audit-sink
+  namespace: ai-gateway
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audit-sink
+  namespace: ai-gateway
+  labels: {app.kubernetes.io/name: audit-sink}
+spec:
+  # LiteLLM's generic_api logger drops a batch it cannot deliver. Two
+  # replicas on two nodes keep the sink up through a node drain.
+  replicas: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: audit-sink}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: audit-sink}
+    spec:
+      serviceAccountName: audit-sink
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels: {app.kubernetes.io/name: audit-sink}
+      containers:
+        - name: sink
+          image: ghcr.io/prosperityai/audit-sink:1.0.0
+          envFrom:
+            - configMapRef: {name: audit-sink-config}
+          env:
+            - name: AUDIT_SINK_TOKEN
+              valueFrom: {secretKeyRef: {name: audit-sink-token, key: token}}
+            - name: AUDIT_DB_USER
+              valueFrom: {secretKeyRef: {name: audit-db-writer, key: username}}
+            - name: AUDIT_DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: audit-db-writer, key: password}}
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            # A full LiteLLM batch (512 events) of long prompts is tens of MB
+            # in memory while it is parsed and redacted.
+            requests: {cpu: 250m, memory: 384Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: audit-db-ca, mountPath: /etc/audit-db-ca, readOnly: true}
+      volumes:
+        - name: audit-db-ca
+          secret:
+            # Created by CloudNativePG: the CA that signed the server certificate.
+            secretName: audit-db-ca
+            items:
+              - {key: ca.crt, path: ca.crt}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: audit-sink
+  namespace: ai-gateway
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: audit-sink}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: audit-sink
+  namespace: ai-gateway
+spec:
+  selector: {app.kubernetes.io/name: audit-sink}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+# Nightly retention: deletes expired content, then expired metadata, and
+# writes audit.purge_log. The purger role can do nothing else.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: audit-purge
+  namespace: ai-gateway
+spec:
+  schedule: "17 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 7
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels: {app.kubernetes.io/name: audit-purge}
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 26
+            runAsGroup: 26
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: purge
+              image: ghcr.io/cloudnative-pg/postgresql:18.6-standard-trixie
+              command: ["psql", "-v", "ON_ERROR_STOP=1", "-c", "SELECT * FROM audit.purge_expired()"]
+              env:
+                - {name: PGHOST, value: audit-db-rw.ai-gateway.svc}
+                - {name: PGDATABASE, value: audit}
+                - {name: PGSSLMODE, value: verify-full}
+                - {name: PGSSLROOTCERT, value: /etc/audit-db-ca/ca.crt}
+                - name: PGUSER
+                  valueFrom: {secretKeyRef: {name: audit-db-purger, key: username}}
+                - name: PGPASSWORD
+                  valueFrom: {secretKeyRef: {name: audit-db-purger, key: password}}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+              resources:
+                requests: {cpu: 50m, memory: 64Mi}
+                limits: {memory: 128Mi}
+              volumeMounts:
+                - {name: audit-db-ca, mountPath: /etc/audit-db-ca, readOnly: true}
+          volumes:
+            - name: audit-db-ca
+              secret:
+                secretName: audit-db-ca
+                items:
+                  - {key: ca.crt, path: ca.crt}
+---
+# Only LiteLLM may post events, and only to /v1/events. Prometheus may read
+# /metrics and nothing else. Cilium enforces the HTTP method and path (L7).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: audit-sink-ingress
+  namespace: ai-gateway
+spec:
+  endpointSelector:
+    matchLabels: {app.kubernetes.io/name: audit-sink}
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: ai-gateway
+            app.kubernetes.io/name: litellm
+      toPorts:
+        - ports:
+            - {port: "8080", protocol: TCP}
+          rules:
+            http:
+              - {method: POST, path: "/v1/events"}
+    - fromEndpoints:
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: monitoring}
+      toPorts:
+        - ports:
+            - {port: "8080", protocol: TCP}
+          rules:
+            http:
+              - {method: GET, path: "/metrics"}
+---
+# The audit database: the sink, the purge job, its own replicas and the
+# CloudNativePG operator. Auditors connect through a port-forward with their
+# own login role; no other workload can reach it.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: audit-db-ingress
+  namespace: ai-gateway
+spec:
+  endpointSelector:
+    matchLabels:
+      cnpg.io/cluster: audit-db
+  ingress:
+    - fromEndpoints:
+        - matchLabels: {app.kubernetes.io/name: audit-sink}
+        - matchLabels: {app.kubernetes.io/name: audit-purge}
+        - matchLabels: {cnpg.io/cluster: audit-db}
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: cnpg-system
+      toPorts:
+        - ports:
+            - {port: "5432", protocol: TCP}
+            - {port: "8000", protocol: TCP}

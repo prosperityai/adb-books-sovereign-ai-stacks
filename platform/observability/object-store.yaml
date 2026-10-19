@@ -1,0 +1,75 @@
+# =============================================================================
+# object-store.yaml — S3-compatible storage for telemetry, inside the cluster
+# Book: Sovereign AI Stacks, Chapter 9   Rook v1.21.0, Ceph v20.2.4
+#
+# Loki (chunks and index) and Langfuse (raw trace events, media, exports)
+# need object storage. This adds a Ceph RADOS Gateway to the Rook cluster
+# from Chapter 4, on the same LUKS-encrypted OSDs, and two buckets.
+#
+# This is TELEMETRY storage. Chapter 4's rule still holds for backups: they
+# go to separate hardware (Chapter 12), never to the cluster they protect.
+# =============================================================================
+apiVersion: ceph.rook.io/v1
+kind: CephObjectStore
+metadata:
+  name: enclave-objects
+  namespace: rook-ceph
+spec:
+  metadataPool:
+    failureDomain: host
+    replicated:
+      size: 3
+  dataPool:
+    failureDomain: host
+    replicated:
+      size: 3
+  # Keep the pools (and the data) if someone deletes this object by mistake.
+  preservePoolsOnDelete: true
+  gateway:
+    port: 80
+    instances: 2
+    priorityClassName: system-cluster-critical
+    placement:
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+    resources:
+      requests: {cpu: 500m, memory: 1Gi}
+      limits: {memory: 2Gi}
+---
+# Bucket provisioning: an ObjectBucketClaim in any namespace gets a bucket
+# and a Ceph user that can access only that bucket.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ceph-bucket
+provisioner: rook-ceph.ceph.rook.io/bucket
+reclaimPolicy: Retain
+parameters:
+  objectStoreName: enclave-objects
+  objectStoreNamespace: rook-ceph
+---
+# Creates Secret loki-chunks (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) and
+# ConfigMap loki-chunks (BUCKET_HOST, BUCKET_NAME, BUCKET_PORT).
+apiVersion: objectbucket.io/v1alpha1
+kind: ObjectBucketClaim
+metadata:
+  name: loki-chunks
+  namespace: monitoring
+spec:
+  bucketName: loki-chunks
+  storageClassName: ceph-bucket
+  additionalConfig:
+    maxSize: "500Gi"
+---
+apiVersion: objectbucket.io/v1alpha1
+kind: ObjectBucketClaim
+metadata:
+  name: langfuse-blobs
+  namespace: monitoring
+spec:
+  bucketName: langfuse-blobs
+  storageClassName: ceph-bucket
+  additionalConfig:
+    maxSize: "200Gi"

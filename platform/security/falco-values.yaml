@@ -1,0 +1,125 @@
+# =============================================================================
+# Falco 0.45.0 (chart falco 9.2.0) on Talos, air-gapped
+# Book: Sovereign AI Stacks, Chapter 10
+# Images: docker.io/falcosecurity/falco:0.45.0
+#         docker.io/falcosecurity/falcosidekick:2.35.0
+#
+# Three changes from the chart defaults make Falco work in an enclave:
+#   1. modern_ebpf driver: Talos refuses unsigned kernel modules and has no
+#      kernel headers, so the kmod driver and its loader can never work.
+#   2. falcoctl disabled: by default it downloads rules and plugins from
+#      falcosecurity.github.io at start and every week. The image already
+#      ships falco_rules.yaml and libcontainer.so, and our own rules come from
+#      a ConfigMap (kustomization.yaml), so nothing needs fetching.
+#   3. Alerts go to the in-enclave Alertmanager through falcosidekick
+#      (Chapter 9's kube-prometheus-stack, release "kps").
+# Note: the falcosidekick subchart always renders a `helm test` pod using
+# curlimages/curl. Never run `helm test` here, and drop that image from the
+# Zarf images list rather than carrying it into the enclave.
+# =============================================================================
+image:
+  registry: docker.io
+  repository: falcosecurity/falco
+  tag: "0.45.0"
+
+driver:
+  kind: modern_ebpf
+  modernEbpf:
+    # CAP_BPF, CAP_PERFMON, CAP_SYS_RESOURCE and CAP_SYS_PTRACE instead of a
+    # fully privileged container.
+    leastPrivileged: true
+
+collectors:
+  containerEngine:
+    enabled: true
+    # Talos runs containerd only. Every other engine would add a hostPath
+    # mount for a socket that does not exist.
+    engines:
+      docker: {enabled: false}
+      podman: {enabled: false}
+      containerd: {enabled: false}
+      cri:
+        enabled: true
+        sockets: ["/run/containerd/containerd.sock"]
+      lxc: {enabled: false}
+      libvirt_lxc: {enabled: false}
+      bpm: {enabled: false}
+  kubernetes:
+    enabled: false   # pod name, namespace and labels come from the CRI
+
+falcoctl:
+  artifact:
+    install:
+      enabled: false
+    follow:
+      enabled: false
+
+# Platform rules (falco-rules.yaml), shipped as ConfigMap falco-sovereign-rules.
+mounts:
+  volumes:
+    - name: sovereign-rules
+      configMap:
+        name: falco-sovereign-rules
+  volumeMounts:
+    - name: sovereign-rules
+      mountPath: /etc/falco/rules.d
+      readOnly: true
+
+tolerations:
+  - {effect: NoSchedule, key: node-role.kubernetes.io/control-plane}
+  # GPU workers are where model weights live; Falco must run there too.
+  - {effect: NoSchedule, key: nvidia.com/gpu, operator: Exists}
+
+resources:
+  requests: {cpu: 100m, memory: 512Mi}
+  limits: {memory: 1Gi}
+
+metrics:
+  enabled: true
+serviceMonitor:
+  create: true
+  labels:
+    release: kps
+
+falco:
+  rules_files:
+    - /etc/falco/falco_rules.yaml
+    - /etc/falco/rules.d
+  json_output: true
+  json_include_output_property: true
+  json_include_tags_property: true
+  # Our rules are WARNING and CRITICAL; NOTICE keeps the bundled rules that
+  # matter (Terminal shell in container is NOTICE) without debug noise.
+  priority: notice
+  buffered_outputs: false
+  stdout_output:
+    enabled: true   # Loki (Chapter 9) collects pod logs: a second, durable copy
+  http_output:
+    enabled: true   # target set by the chart to falcosidekick
+
+falcosidekick:
+  enabled: true
+  replicaCount: 2
+  image:
+    registry: docker.io
+    repository: falcosecurity/falcosidekick
+    tag: "2.35.0"
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1234
+    fsGroup: 1234
+    seccompProfile: {type: RuntimeDefault}
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities: {drop: ["ALL"]}
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 128Mi}
+  webui:
+    enabled: false   # its Redis and UI add little; Grafana shows the alerts
+  config:
+    alertmanager:
+      hostport: http://kps-kube-prometheus-stack-alertmanager.monitoring.svc:9093
+      endpoint: /api/v2/alerts
+      minimumpriority: warning

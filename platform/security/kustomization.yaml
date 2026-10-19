@@ -1,0 +1,18 @@
+# =============================================================================
+# kustomization.yaml — Falco's platform rules as a ConfigMap
+# Book: Sovereign AI Stacks, Chapter 10
+# Render: kubectl kustomize platform/security   (or list it in zarf.yaml)
+# The rules file stays a plain Falco rules file, so `falco -V` and code review
+# work on it directly; the ConfigMap is generated, never edited by hand.
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: falco
+configMapGenerator:
+  - name: falco-sovereign-rules
+    files:
+      - sovereign-rules.yaml=falco-rules.yaml
+generatorOptions:
+  # A stable name: falco-values.yaml mounts this ConfigMap by name, and Falco
+  # (watch_config_files) reloads when its content changes.
+  disableNameSuffixHash: true

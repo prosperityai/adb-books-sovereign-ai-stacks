@@ -1,0 +1,27 @@
+# =============================================================================
+# velero-restore.yaml.tmpl — restore the chat-ui namespace, with its volume
+# data, into the drill namespace. Rendered by ops/scripts/dr_drill.sh.
+# Book: Sovereign AI Stacks, Chapter 12 (Velero 1.18.4)
+# =============================================================================
+apiVersion: velero.io/v1
+kind: Restore
+metadata:
+  name: ${DRILL_ID}-chat-ui
+  namespace: velero
+  labels:
+    sovereign-ai/dr-drill: "${DRILL_ID}"
+spec:
+  backupName: ${BACKUP}
+  includedNamespaces: [chat-ui]
+  namespaceMapping:
+    chat-ui: ${DRILL_NS}
+  restorePVs: true
+  existingResourcePolicy: none
+  excludedResources:
+    # The production hostnames already belong to production.
+    - ingresses.networking.k8s.io
+    # chat-ui's policies select every pod in their namespace; restored into
+    # the drill namespace they would also lock out the drill databases.
+    - ciliumnetworkpolicies.cilium.io
+    - events
+    - events.events.k8s.io

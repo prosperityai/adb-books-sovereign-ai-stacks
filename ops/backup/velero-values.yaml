@@ -1,0 +1,177 @@
+# =============================================================================
+# Velero 1.18.4 (chart velero 12.2.1) — Kubernetes objects and file-system
+# volume backups to the off-cluster S3 appliance
+# Book: Sovereign AI Stacks, Chapter 12
+# Plugin: velero/velero-plugin-for-aws v1.14.4 (the v1.14.x line pairs with Velero 1.18.x)
+#
+# The backup target is https://backup.enclave.internal (10.20.0.40): separate
+# hardware, in a second room, on its own power. NEVER a Ceph bucket on this
+# cluster (see the war story in Chapter 12).
+#
+# Secrets in the velero namespace (create before installing):
+#   backup-appliance-velero   key "cloud": an AWS credentials file for a key
+#                             that can read and write only the "velero" bucket
+#   backup-appliance-ca       key "ca.crt": the enclave CA
+#   velero-repo-credentials   key "repository-password": the Kopia repository
+#                             password. Velero's built-in default is a constant
+#                             shared by every installation; set your own and
+#                             escrow it OFF the cluster, or restores into a
+#                             rebuilt cluster are impossible.
+# =============================================================================
+image:
+  repository: docker.io/velero/velero
+  # The chart's default is v1.18.2; v1.18.4 is the current patch release.
+  tag: v1.18.4
+  pullPolicy: IfNotPresent
+
+initContainers:
+  - name: velero-plugin-for-aws
+    image: docker.io/velero/velero-plugin-for-aws:v1.14.4
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+      - mountPath: /target
+        name: plugins
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {memory: 128Mi}
+
+# The Velero server needs the API but nothing on the host.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+resources:
+  requests: {cpu: 500m, memory: 512Mi}
+  limits: {memory: 1Gi}
+
+# Never run more than one server; keep the one we have during node drains.
+podDisruptionBudget:
+  enabled: false
+
+upgradeCRDs: true
+cleanUpCRDs: false
+
+credentials:
+  useSecret: true
+  existingSecret: backup-appliance-velero
+
+# CSI snapshots would stay inside Ceph, on the cluster they are meant to
+# protect. Volume data leaves the cluster through the node agent instead.
+snapshotsEnabled: false
+backupsEnabled: true
+
+configuration:
+  # The location is declared under extraObjects below, because the chart's
+  # template cannot yet render caCertRef (Velero 1.18's non-deprecated way to
+  # trust a private CA). An empty list makes the chart render none.
+  backupStorageLocation: []
+  volumeSnapshotLocation: []
+  defaultBackupStorageLocation: enclave-backup
+  uploaderType: kopia
+  # Opt in per Schedule, never by default: databases are backed up by their
+  # own tools (CloudNativePG, Qdrant snapshots), not by copying live files.
+  defaultVolumesToFsBackup: false
+  defaultBackupTTL: 720h
+  fsBackupTimeout: 4h
+  garbageCollectionFrequency: 1h
+  defaultRepoMaintainFrequency: 24h
+  logFormat: json
+  repositoryMaintenanceJob:
+    repositoryConfigData:
+      name: velero-repo-maintenance
+      global:
+        keepLatestMaintenanceJobs: 3
+        podResources:
+          cpuRequest: 500m
+          memoryRequest: 1Gi
+          memoryLimit: 2Gi
+      repositories: {}
+
+# File-system backup (Kopia) reads pod volumes from the host, so the agent
+# runs on every node, as root, in the privileged velero namespace.
+deployNodeAgent: true
+nodeAgent:
+  podVolumePath: /var/lib/kubelet/pods
+  tolerations:
+    - operator: Exists
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {memory: 2Gi}
+  podSecurityContext:
+    runAsUser: 0
+    seccompProfile:
+      type: RuntimeDefault
+  # Root without privilege escalation: reading other pods' files and
+  # restoring their ownership needs CAP_DAC_READ_SEARCH/CHOWN/FOWNER, which
+  # root keeps; it does not need privileged mode.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    autodetect: true
+    enabled: true
+  nodeAgentPodMonitor:
+    autodetect: true
+    enabled: true
+  prometheusRule:
+    autodetect: true
+    enabled: true
+    spec:
+      - alert: VeleroBackupStale
+        # The tenant-data schedule runs daily; 26 h allows for one slow run.
+        expr: time() - velero_backup_last_successful_timestamp{schedule!=""} > 26 * 3600
+        for: 15m
+        labels: {severity: critical}
+        annotations:
+          summary: "No successful Velero backup for schedule {{ $labels.schedule }} in 26 hours"
+          runbook: "ops/runbooks/handover-checklist.md#backups"
+      - alert: VeleroBackupFailed
+        expr: increase(velero_backup_failure_total[6h]) > 0 or increase(velero_backup_partial_failure_total[6h]) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "A Velero backup failed or partially failed in the last 6 hours"
+
+extraObjects:
+  - apiVersion: velero.io/v1
+    kind: BackupStorageLocation
+    metadata:
+      name: enclave-backup
+      namespace: velero
+    spec:
+      provider: aws
+      default: true
+      accessMode: ReadWrite
+      validationFrequency: 5m
+      credential:
+        name: backup-appliance-velero
+        key: cloud
+      objectStorage:
+        bucket: velero
+        prefix: sovereign-ai
+        caCertRef:
+          name: backup-appliance-ca
+          key: ca.crt
+      config:
+        region: us-east-1
+        s3Url: https://backup.enclave.internal
+        s3ForcePathStyle: "true"
+        # Recent AWS SDKs add CRC32 checksums that many on-prem S3
+        # implementations reject (XAmzContentSHA256Mismatch). Turn them off.
+        checksumAlgorithm: ""

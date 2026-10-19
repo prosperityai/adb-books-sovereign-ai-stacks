@@ -1,0 +1,131 @@
+# =============================================================================
+# velero-schedule.yaml — what Velero backs up, how often, and what it never
+# copies as live files
+# Book: Sovereign AI Stacks, Chapter 12 (Velero 1.18.4)
+#
+# Two schedules, because objects and data have different shapes:
+#   platform-resources  every 6 h: every Kubernetes object (Secrets included),
+#                       no volume data. Small, fast, restorable in minutes.
+#   tenant-data         daily: chat-ui namespace WITH volume data (Open WebUI
+#                       conversation history), via Kopia file-system backup.
+#
+# Not here, on purpose: databases (CloudNativePG, cnpg-backup.yaml), vector
+# collections (Qdrant snapshots, qdrant/), model weights (re-pulled from
+# Harbor by digest), and anything rendered from Git.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: velero-volume-policy
+  namespace: velero
+data:
+  # First matching rule wins. A database copied file-by-file while it is
+  # writing is a corrupt database, so every database volume is skipped even
+  # if someone later adds its namespace to a schedule.
+  policy.yaml: |
+    version: v1
+    volumePolicies:
+      - conditions:
+          pvcLabels:
+            cnpg.io/pvcRole: PG_DATA
+        action:
+          type: skip
+      - conditions:
+          pvcLabels:
+            cnpg.io/pvcRole: PG_WAL
+        action:
+          type: skip
+      - conditions:
+          pvcLabels:
+            app: qdrant
+        action:
+          type: skip
+      - conditions:
+          volumeTypes: [emptyDir, configmap, secret, projected, downwardAPI]
+        action:
+          type: skip
+      - conditions:
+          storageClass: [ceph-block]
+        action:
+          type: fs-backup
+---
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: platform-resources
+  namespace: velero
+spec:
+  schedule: "15 */6 * * *"
+  useOwnerReferencesInBackup: false
+  template:
+    storageLocation: enclave-backup
+    ttl: 720h
+    includedNamespaces: ["*"]
+    excludedNamespaces: [kube-system, velero]
+    includeClusterResources: true
+    snapshotVolumes: false
+    defaultVolumesToFsBackup: false
+    excludedResources:
+      # Recreated by their controllers.
+      - pods
+      - replicasets.apps
+      - events
+      - events.events.k8s.io
+      # Volumes travel in tenant-data or through their own tools; an empty
+      # PVC restored here would shadow the real data.
+      - persistentvolumeclaims
+      - persistentvolumes
+      # A restored CloudNativePG Cluster object bootstraps a NEW, EMPTY
+      # database with initdb. Databases come back through recovery manifests
+      # (dr_drill.sh shows the shape), never through Velero.
+      - clusters.postgresql.cnpg.io
+      - backups.postgresql.cnpg.io
+      # Cilium regenerates these per node and per endpoint.
+      - ciliumendpoints.cilium.io
+      - ciliumendpointslices.cilium.io
+      - ciliumidentities.cilium.io
+      - ciliumnodes.cilium.io
+---
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: tenant-data
+  namespace: velero
+spec:
+  # 23:00 UTC = 02:00 in Dar es Salaam and Nairobi.
+  schedule: "0 23 * * *"
+  useOwnerReferencesInBackup: false
+  template:
+    storageLocation: enclave-backup
+    ttl: 720h
+    includedNamespaces: [chat-ui]
+    snapshotVolumes: false
+    resourcePolicy:
+      kind: configmap
+      name: velero-volume-policy
+    hooks:
+      resources:
+        # Open WebUI keeps history in SQLite. Copying webui.db mid-write gives
+        # a torn file, so first take a consistent online copy with SQLite's
+        # own backup API; the restore runbook uses that copy.
+        - name: open-webui-sqlite
+          includedNamespaces: [chat-ui]
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: open-webui
+          pre:
+            - exec:
+                container: open-webui
+                onError: Fail
+                timeout: 5m
+                command:
+                  - python3
+                  - -c
+                  - >-
+                    import os, sqlite3;
+                    d = '/app/backend/data';
+                    os.makedirs(d + '/velero', exist_ok=True);
+                    src = sqlite3.connect(d + '/webui.db');
+                    dst = sqlite3.connect(d + '/velero/webui.db.tmp');
+                    src.backup(dst); dst.close(); src.close();
+                    os.replace(d + '/velero/webui.db.tmp', d + '/velero/webui.db')

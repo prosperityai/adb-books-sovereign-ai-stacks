@@ -1,0 +1,54 @@
+# =============================================================================
+# lint.yml: every file in the repository is linted and every test suite runs
+# on each push and pull request (`make check`)
+# Book: Sovereign AI Stacks
+#
+# Runs on the connected side only. Nothing here touches a cluster.
+# Pinned: actions/checkout v7.0.1, actions/setup-python v7.0.0, Python 3.13,
+# ruff 0.17.1, yamllint 1.38.0, shellcheck-py 0.11.0.1, kubeconform 0.7.0.
+# =============================================================================
+name: lint
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install linters and every package's test dependencies
+        run: |
+          python -m pip install ruff==0.17.1 yamllint==1.38.0 shellcheck-py==0.11.0.1 \
+            pytest==9.1.1 pyyaml==6.0.3 httpx==0.28.1
+          python -m pip install "./apps/rag[test]" "./apps/audit[test]" "./evals[test]" "./ops[test]"
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
+
+      - name: Validate Kubernetes manifests
+        run: |
+          curl -sSLo kubeconform.tgz \
+            https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz
+          tar -xzf kubeconform.tgz kubeconform
+          # Kubernetes manifests only (not values files, Falco rules or alert
+          # rules, which promtool tests). Custom resources (Cilium, Kyverno,
+          # CloudNativePG, Keycloak, Prometheus Operator) are skipped here and
+          # validated by their own tools in the chapters.
+          git ls-files 'platform/**/*.yaml' 'ops/**/*.yaml' \
+            | grep -v -e 'values' -e 'kustomization.yaml' -e '/tests/' -e 'llm-platform-rules' -e 'falco-rules' \
+            | xargs ./kubeconform -strict -summary -ignore-missing-schemas \
+                -kubernetes-version 1.37.1

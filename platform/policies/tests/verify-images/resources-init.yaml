@@ -1,0 +1,21 @@
+# An init container is an image too: it must not be a way round the check.
+# Book: Sovereign AI Stacks, Chapter 10
+# Checked by run.sh with `kyverno apply`: the CLI's test runner scores each
+# image separately, so a pod whose main image is signed but whose init image
+# is not shows one pass row and one fail row. Admission rejects the whole pod.
+apiVersion: v1
+kind: Pod
+metadata: {name: bad-unsigned-init, namespace: rag}
+spec:
+  initContainers:
+    - name: fetch
+      image: docker.io/library/demo-unsigned:1.0
+      resources:
+        requests: {memory: 64Mi}
+        limits: {memory: 64Mi}
+  containers:
+    - name: app
+      image: docker.io/library/demo-signed:1.0
+      resources:
+        requests: {memory: 64Mi}
+        limits: {memory: 64Mi}

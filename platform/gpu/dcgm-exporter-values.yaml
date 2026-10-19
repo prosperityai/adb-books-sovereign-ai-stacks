@@ -1,6 +1,8 @@
 # =============================================================================
 # DCGM exporter 4.8.4 values — GPU utilisation, memory, temperature, XID errors
-# Book: Sovereign AI Stacks, Chapters 4 and 9
+# Book: Sovereign AI Stacks, Chapters 4 and 9 (Chapter 4 installs it with
+#       --set serviceMonitor.enabled=false; the CRD arrives in Chapter 9)
+# Chart dcgm-exporter 4.8.4, image nvcr.io/nvidia/k8s/dcgm-exporter:4.6.1-4.8.4-distroless
 # =============================================================================
 runtimeClassName: nvidia
 
@@ -12,6 +14,66 @@ tolerations:
     operator: Exists
     effect: NoSchedule
 
-# The ServiceMonitor CRD arrives with kube-prometheus-stack in Chapter 9.
+# Chapter 9: kube-prometheus-stack (release kps) now provides the CRD.
 serviceMonitor:
-  enabled: false
+  enabled: true
+  interval: 15s
+  scrapeTimeout: 10s
+  # Keep the namespace/pod/container labels that describe the WORKLOAD using
+  # each GPU. With honorLabels: false they are renamed exported_namespace and
+  # exported_pod, and every GPU looks as if it belongs to the gpu namespace.
+  honorLabels: true
+
+# The complete counter list (customMetrics is not additive). It is the chart
+# default plus what the default leaves out and an operator needs most:
+# throttling reasons and durations, and XID errors as counters.
+customMetrics: |
+  # DCGM FIELD, Prometheus metric type, help message
+
+  # Clocks: a falling SM clock under steady load is the first sign of throttling
+  DCGM_FI_DEV_SM_CLOCK,  gauge, SM clock frequency (in MHz).
+  DCGM_FI_DEV_MEM_CLOCK, gauge, Memory clock frequency (in MHz).
+  # Raw bitmask of active clock event (throttle) reasons. Field 112; the old
+  # name DCGM_FI_DEV_CLOCK_THROTTLE_REASONS is a legacy alias of this one.
+  DCGM_FI_DEV_CLOCKS_EVENT_REASONS, gauge, Bitmask of active clock event reasons.
+
+  # Temperature
+  DCGM_FI_DEV_MEMORY_TEMP, gauge, Memory temperature (in C).
+  DCGM_FI_DEV_GPU_TEMP,    gauge, GPU temperature (in C).
+
+  # Power
+  DCGM_FI_DEV_POWER_USAGE,              gauge, Power draw (in W).
+  DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION, counter, Total energy consumption since the driver was last reloaded (in mJ).
+
+  # PCIe
+  DCGM_FI_DEV_PCIE_REPLAY_COUNTER, counter, Total number of PCIe retries.
+
+  # Utilisation
+  DCGM_FI_DEV_GPU_UTIL,      gauge, GPU utilization (in %).
+  DCGM_FI_DEV_MEM_COPY_UTIL, gauge, Memory utilization (in %).
+
+  # Errors and violations
+  DCGM_FI_DEV_XID_ERRORS,            gauge,   Value of the last XID error encountered.
+  DCGM_FI_DEV_POWER_VIOLATION,       counter, Throttling duration due to power constraints (in ns).
+  DCGM_FI_DEV_THERMAL_VIOLATION,     counter, Throttling duration due to thermal constraints (in ns).
+  DCGM_FI_DEV_BOARD_LIMIT_VIOLATION, counter, Throttling duration due to board limit constraints (in ns).
+  DCGM_FI_DEV_RELIABILITY_VIOLATION, counter, Throttling duration due to reliability constraints (in ns).
+
+  # Exporter-computed counters. PromQL has no bitwise operators, so alerts use
+  # these (one series per clock_event reason / per xid) instead of the bitmask.
+  DCGM_EXP_CLOCK_EVENTS_TOTAL, counter, Total clock events observed since exporter start (edge-counted).
+  DCGM_EXP_XID_ERRORS_TOTAL,   counter, Total XID errors observed since exporter start.
+
+  # Memory
+  DCGM_FI_DEV_FB_FREE, gauge, Framebuffer memory free (in MiB).
+  DCGM_FI_DEV_FB_USED, gauge, Framebuffer memory used (in MiB).
+
+  # Remapped rows (HBM/GDDR health)
+  DCGM_FI_DEV_UNCORRECTABLE_REMAPPED_ROWS, counter, Number of remapped rows for uncorrectable errors
+  DCGM_FI_DEV_CORRECTABLE_REMAPPED_ROWS,   counter, Number of remapped rows for correctable errors
+  DCGM_FI_DEV_ROW_REMAP_FAILURE,           gauge,   Whether remapping of rows has failed
+
+  # DCP (profiling) metrics: real tensor-core activity, not just "busy"
+  DCGM_FI_PROF_GR_ENGINE_ACTIVE,   gauge, Ratio of time the graphics engine is active.
+  DCGM_FI_PROF_PIPE_TENSOR_ACTIVE, gauge, Ratio of cycles the tensor (HMMA) pipe is active.
+  DCGM_FI_PROF_DRAM_ACTIVE,        gauge, Ratio of cycles the device memory interface is active sending or receiving data.

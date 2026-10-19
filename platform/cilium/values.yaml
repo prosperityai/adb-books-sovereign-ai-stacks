@@ -46,7 +46,10 @@ hubble:
       - flow
       - policy:sourceContext=app|workload-name|pod|reserved-identity;destinationContext=app|workload-name|pod|dns|reserved-identity;labelsContext=source_namespace,destination_namespace
     serviceMonitor:
-      enabled: false   # switched on in Chapter 9 once the Prometheus CRDs exist
+      # Off at bootstrap: the ServiceMonitor CRD arrives with Chapter 9's
+      # kube-prometheus-stack, which then upgrades Cilium with
+      # --reuse-values --set hubble.metrics.serviceMonitor.enabled=true
+      enabled: false
 
 # Users reach the chat UIs and Keycloak through Cilium's built-in ingress
 # controller (Envoy), exposed on an enclave IP announced over ARP (L2).

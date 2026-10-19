@@ -1,0 +1,59 @@
+# =============================================================================
+# qdrant-verify-job.yaml.tmpl — re-download and re-hash every object of the
+# latest Qdrant snapshot run. Rendered by ops/scripts/dr_drill.sh.
+# Book: Sovereign AI Stacks, Chapter 12
+# =============================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${DRILL_ID}-qdrant-verify
+  namespace: rag
+  labels:
+    app.kubernetes.io/name: qdrant-snapshot
+    sovereign-ai/dr-drill: "${DRILL_ID}"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: qdrant-snapshot
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: verify
+          image: docker.io/library/python:3.13.16-slim-trixie
+          command: ["python3", "/scripts/qdrant_snapshot.py", "verify"]
+          env:
+            - {name: QDRANT_NODES, value: "unused-for-verify"}
+            - {name: S3_ENDPOINT, value: "https://backup.enclave.internal"}
+            - {name: S3_BUCKET, value: qdrant}
+            - {name: S3_PREFIX, value: sovereign-ai}
+            - {name: S3_CA_FILE, value: /ca/ca.crt}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: qdrant-backup-s3, key: AWS_ACCESS_KEY_ID}}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: qdrant-backup-s3, key: AWS_SECRET_ACCESS_KEY}}
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 500m, memory: 256Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: script, mountPath: /scripts, readOnly: true}
+            - {name: ca, mountPath: /ca, readOnly: true}
+      volumes:
+        - name: script
+          configMap: {name: qdrant-snapshot-script}
+        - name: ca
+          secret: {secretName: backup-appliance-ca}

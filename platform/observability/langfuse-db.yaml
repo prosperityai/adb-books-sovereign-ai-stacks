@@ -1,0 +1,36 @@
+# =============================================================================
+# langfuse-db.yaml — Langfuse's transactional database (users, projects,
+# API keys, prompts). Traces themselves go to ClickHouse.
+# Book: Sovereign AI Stacks, Chapter 9
+# Operator: CloudNativePG 1.30.1   Image: PostgreSQL 18.6
+#
+# The Langfuse chart can deploy a single-pod Postgres of its own. The platform
+# already runs CloudNativePG with replication and backups (Chapters 6 and 12),
+# so Langfuse gets the same treatment as the gateway's database.
+# =============================================================================
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: langfuse-db
+  namespace: monitoring
+spec:
+  instances: 2
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.6-standard-trixie
+  postgresql:
+    parameters:
+      max_connections: "200"
+      log_statement: ddl
+  bootstrap:
+    initdb:
+      database: langfuse
+      owner: langfuse
+  storage:
+    storageClass: ceph-block
+    size: 20Gi
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+  resources:
+    requests: {cpu: 500m, memory: 1Gi}
+    limits: {memory: 2Gi}

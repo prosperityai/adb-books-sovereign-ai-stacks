@@ -1,0 +1,39 @@
+# =============================================================================
+# platform/observability — the manifests around the Chapter 9 Helm releases
+# Book: Sovereign AI Stacks, Chapter 9
+# Render:  kubectl kustomize platform/observability
+#
+# Resources keep their own namespaces (monitoring, ai-gateway, gpu,
+# inference, rook-ceph), so there is deliberately no top-level namespace.
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - object-store.yaml
+  - langfuse-db.yaml
+  - scrape/monitors.yaml
+  - network/policies.yaml
+  - alerts/llm-platform-rules.yaml
+  - retention/langfuse-retention.yaml
+
+configMapGenerator:
+  # Grafana's sidecar loads every ConfigMap labelled grafana_dashboard=1.
+  # No name suffix: a hashed name would leave the previous ConfigMap behind
+  # on every change, and Grafana would load two dashboards with one uid.
+  - name: dashboards-sovereign-ai
+    namespace: monitoring
+    files:
+      - dashboards/gpu-fleet.json
+      - dashboards/tokens-by-tenant.json
+    options:
+      disableNameSuffixHash: true
+      labels:
+        grafana_dashboard: "1"
+      annotations:
+        grafana_folder: Sovereign AI
+  # The retention script. Here the hash suffix is wanted: a script change
+  # renames the ConfigMap, which updates the CronJob that mounts it.
+  - name: langfuse-retention-script
+    namespace: monitoring
+    files:
+      - tools/langfuse_retention.py

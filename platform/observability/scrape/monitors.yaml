@@ -1,0 +1,80 @@
+# =============================================================================
+# monitors.yaml — what Prometheus scrapes beyond kube-prometheus-stack's own
+# targets. Each monitor lives in the namespace of the workload it watches.
+# Book: Sovereign AI Stacks, Chapter 9
+# (DCGM's ServiceMonitor comes from its chart: platform/gpu/dcgm-exporter-values.yaml.
+#  Loki, Alloy and the ClickHouse operator also ship their own.)
+# =============================================================================
+# vLLM model servers. /metrics is outside vLLM's API-key middleware, which
+# guards only /v1, /v2, /inference and /cohere, so no credentials are needed.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: vllm-model-servers
+  namespace: inference
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: model-server
+  podMetricsEndpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      relabelings:
+        # Join key with DCGM: the exporter's Hostname label is the node name.
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: Hostname
+        - sourceLabels: [__meta_kubernetes_pod_label_sovereign_ai_model]
+          targetLabel: model_alias
+---
+# LiteLLM gateway, dedicated metrics port (litellm-values.observability.yaml).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: litellm
+  namespace: ai-gateway
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: litellm
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      metricRelabelings:
+        # Belt and braces behind prometheus_exclude_labels: if an upgrade ever
+        # re-adds a per-person label, drop it at ingestion.
+        - action: labeldrop
+          regex: (end_user|user_email|client_ip|user_agent)
+---
+# CloudNativePG metrics exporters (port "metrics", 9187) for the gateway's
+# database and the audit database. CNPG deprecates enablePodMonitor in favour
+# of PodMonitors you manage yourself.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cnpg-ai-gateway
+  namespace: ai-gateway
+spec:
+  selector:
+    matchExpressions:
+      - key: cnpg.io/cluster
+        operator: In
+        values: [litellm-db, audit-db]
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cnpg-langfuse-db
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      cnpg.io/cluster: langfuse-db
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 30s

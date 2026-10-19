@@ -1,0 +1,48 @@
+# =============================================================================
+# Barman Cloud plugin v0.15.1 (chart plugin-barman-cloud 0.8.1) — the
+# CloudNativePG backup engine, installed next to the operator in cnpg-system
+# Book: Sovereign AI Stacks, Chapter 12
+#
+# The chart's default creates cert-manager Certificates for the gRPC link
+# between the operator and the plugin. This platform has no cert-manager, so
+# ops/scripts/barman_plugin_tls.sh creates the two Secrets the chart would
+# otherwise ask cert-manager for (barman-cloud-server-tls and
+# barman-cloud-client-tls), and the chart is told not to.
+#
+# The sidecar image (ghcr.io/cloudnative-pg/plugin-barman-cloud-sidecar)
+# appears only in an environment variable, so image scanners that read pod
+# specs miss it: list it explicitly in the Zarf package.
+# =============================================================================
+image:
+  registry: ghcr.io
+  repository: cloudnative-pg/plugin-barman-cloud
+  tag: v0.15.1
+sidecarImage:
+  registry: ghcr.io
+  repository: cloudnative-pg/plugin-barman-cloud-sidecar
+  tag: v0.15.1
+
+certificate:
+  createIssuer: false
+  createServerCertificate: false
+  createClientCertificate: false
+
+resources:
+  requests: {cpu: 100m, memory: 128Mi}
+  limits: {memory: 256Mi}
+
+# The chart's defaults already match the restricted Pod Security Standard of
+# cnpg-system; restated so a reviewer does not have to look them up.
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+  capabilities:
+    drop: ["ALL"]

@@ -1,0 +1,179 @@
+# =============================================================================
+# eval-job.yaml — run the acceptance gate for a candidate model inside the enclave
+# Book: Sovereign AI Stacks, Chapter 11
+#
+# One Job per promotion decision. Init containers run sequentially:
+#   1. run-baseline   the model in production, re-run now, in the same window
+#   2. run-candidate  the model under test
+# then the main container applies acceptance/criteria.yaml. If any gate fails
+# the container exits 1, the Job is Failed, and the promotion does not happen.
+#
+# Secrets (namespace evals):
+#   eval-harness-gateway-key  from provision_keys.py (Chapter 6), key "key"
+#   eval-rag-client           the rag-ministry-health client secret (Chapter 7),
+#                             key "client-secret"
+# Image built from evals/Dockerfile: ghcr.io/prosperityai/sovereign-evals:1.0.0
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: eval-results
+  namespace: evals
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: ceph-block
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: eval-qwen3-8-27b-candidate
+  namespace: evals
+  labels:
+    app.kubernetes.io/name: eval-harness
+spec:
+  backoffLimit: 0                  # a failed gate is an answer, not a flake to retry
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 604800  # keep the pod (and its logs) for a week
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: eval-harness
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: run-baseline
+          image: ghcr.io/prosperityai/sovereign-evals:1.0.0
+          args:
+            - run
+            - --model=qwen3.8-27b
+            - --concurrency=4
+            - --out=/results/$(JOB_NAME)/baseline
+          env: &harness-env
+            - name: JOB_NAME
+              valueFrom: {fieldRef: {fieldPath: "metadata.labels['batch.kubernetes.io/job-name']"}}
+            - {name: EVAL_GATEWAY_URL, value: "http://litellm.ai-gateway.svc:4000"}
+            - {name: EVAL_RAG_URL, value: "http://rag-api.rag.svc:8000"}
+            - {name: EVAL_OIDC_TOKEN_URL, value: "http://sso-service.identity.svc:8080/realms/government/protocol/openid-connect/token"}
+            - {name: EVAL_RAG_CLIENT_ID, value: rag-ministry-health}
+            - name: EVAL_GATEWAY_KEY
+              valueFrom: {secretKeyRef: {name: eval-harness-gateway-key, key: key}}
+            - name: EVAL_RAG_CLIENT_SECRET
+              valueFrom: {secretKeyRef: {name: eval-rag-client, key: client-secret}}
+          securityContext: &locked-down
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources: &small
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {memory: 512Mi}
+          volumeMounts: &mounts
+            - {name: results, mountPath: /results}
+            - {name: tmp, mountPath: /tmp}
+        - name: run-candidate
+          image: ghcr.io/prosperityai/sovereign-evals:1.0.0
+          args:
+            - run
+            - --model=qwen3.8-27b-candidate
+            - --concurrency=4
+            - --out=/results/$(JOB_NAME)/candidate
+          env: *harness-env
+          securityContext: *locked-down
+          resources: *small
+          volumeMounts: *mounts
+      containers:
+        - name: gate
+          image: ghcr.io/prosperityai/sovereign-evals:1.0.0
+          args:
+            - gate
+            - --baseline=/results/$(JOB_NAME)/baseline/run.json
+            - --candidate=/results/$(JOB_NAME)/candidate/run.json
+            - --out=/results/$(JOB_NAME)/gate
+          env:
+            - name: JOB_NAME
+              valueFrom: {fieldRef: {fieldPath: "metadata.labels['batch.kubernetes.io/job-name']"}}
+          securityContext: *locked-down
+          resources: *small
+          volumeMounts: *mounts
+      volumes:
+        - name: results
+          persistentVolumeClaim: {claimName: eval-results}
+        - name: tmp
+          emptyDir: {sizeLimit: 256Mi}
+---
+# The harness holds a gateway key and sends adversarial prompts on purpose.
+# Nothing may connect to it, and it may reach exactly four things.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: eval-harness-lockdown
+  namespace: evals
+spec:
+  endpointSelector: {}
+  # An empty rule turns on default-deny for ingress without allowing anything.
+  ingress:
+    - {}
+  # Allow rules, so the policy still holds if the cluster baseline is relaxed.
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: ai-gateway
+            app.kubernetes.io/name: litellm
+      toPorts:
+        - ports: [{port: "4000", protocol: TCP}]
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: rag
+            app.kubernetes.io/name: rag-api
+      toPorts:
+        - ports: [{port: "8000", protocol: TCP}]
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: identity
+            app: keycloak
+      toPorts:
+        - ports: [{port: "8080", protocol: TCP}]
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports: [{port: "53", protocol: ANY}]
+          rules:
+            dns:
+              - matchPattern: "*"
+  # Deny rules, because Chapter 4's baseline allows all in-cluster traffic and
+  # Cilium allow rules only ever add. Deny wins over allow, so these narrow it.
+  egressDeny:
+    - toEndpoints:
+        - matchExpressions:
+            - key: k8s:io.kubernetes.pod.namespace
+              operator: NotIn
+              values: [ai-gateway, rag, identity, kube-system]
+    - toEndpoints:
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: ai-gateway}
+          matchExpressions:
+            - {key: app.kubernetes.io/name, operator: NotIn, values: [litellm]}
+    - toEndpoints:
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: rag}
+          matchExpressions:
+            - {key: app.kubernetes.io/name, operator: NotIn, values: [rag-api]}
+    - toEndpoints:
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: identity}
+          matchExpressions:
+            - {key: app, operator: NotIn, values: [keycloak]}
+    - toEndpoints:
+        - matchLabels: {k8s:io.kubernetes.pod.namespace: kube-system}
+          matchExpressions:
+            - {key: k8s-app, operator: NotIn, values: [kube-dns]}
+    - toEntities: [host, remote-node, kube-apiserver]
+    - toCIDR: [10.20.0.0/24]

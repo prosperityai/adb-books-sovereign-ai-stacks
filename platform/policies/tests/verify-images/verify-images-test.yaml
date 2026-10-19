@@ -1,0 +1,24 @@
+# Kyverno CLI test for verify-images.yaml. Book: Sovereign AI Stacks, Chapter 10
+# Not named kyverno-test.yaml on purpose: it needs a lab registry with signed
+# images, so Chapter 7's offline `kyverno test platform/policies/tests` must
+# not pick it up. Run it with:  platform/policies/tests/verify-images/run.sh
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: verify-images
+policies:
+  - ../../verify-images.yaml
+resources:
+  - resources.yaml
+# Written by run.sh: the lab enclave public key, as the ConfigMap would hold it.
+variables: values.yaml
+results:
+  - policy: verify-images
+    rule: route-through-harbor
+    kind: Pod
+    resources: [rewrite-ghcr]
+    patchedResources: patched-rewrite-ghcr.yaml
+    result: pass
+  - {policy: verify-images, rule: verify-enclave-signature, kind: Pod, resources: [good-signed], result: pass}
+  - {policy: verify-images, rule: verify-enclave-signature, kind: Pod, resources: [bad-unsigned, bad-rogue-key], result: fail}
+  - {policy: verify-images, rule: require-harbor-registry, kind: Pod, resources: [good-signed, rewrite-ghcr], result: pass}

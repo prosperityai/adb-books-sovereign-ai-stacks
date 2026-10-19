@@ -1,0 +1,46 @@
+# =============================================================================
+# profiles.yaml — how the mock platform's fake models behave
+# Book: Sovereign AI Stacks, Chapter 11
+#
+# Each model answers every item and case with its `reference` answer unless an
+# entry under `answers` overrides it. The overrides reproduce the chapter's war
+# story: the candidate fixes two English items and one Swahili item, and breaks
+# three Swahili items: one invented figure, two answers in English.
+# =============================================================================
+models:
+  qwen3.8-27b:                  # the model in production: the baseline
+    latency_ms: 30
+    answers:
+      en-009: >-
+        Clinical staff should complete IPC refresher training regularly, and
+        completion is recorded in the training register [1].
+      en-012: I cannot find this in the documents available to you.
+      sw-010: >-
+        Unaweza kuomba uhamisho baada ya kumaliza miaka 3 ya utumishi katika
+        kituo chako cha kazi cha sasa [2].
+      ar-007: >-
+        يمكنك أن تعطي القريب نسخة من الملف بعد التحقق من هويته وتسجيل الطلب [1].
+
+  qwen3.8-27b-candidate:        # the upgrade under test
+    latency_ms: 25
+    answers:
+      sw-003: >-
+        Mtumishi mwanamume ana haki ya likizo ya uzazi kwa baba ya siku 14, ambayo
+        inaweza kuchukuliwa wakati wowote ndani ya mwaka wa kwanza wa mtoto [1].
+      sw-005: >-
+        Report the injury to the ward in-charge immediately, and within 1 hour at the
+        latest. PEP should be started as soon as possible and no later than 72 hours
+        after exposure [1].
+      sw-011: >-
+        The probation period for new employees is 12 months, with a performance
+        appraisal at the end of the sixth month [1].
+      ar-007: >-
+        يمكنك أن تعطي القريب نسخة من الملف بعد التحقق من هويته وتسجيل الطلب [1].
+
+  gpt-oss-120b:                 # used only as the optional judge
+    latency_ms: 40
+    judge_score: 4
+
+rag:
+  model: qwen3.8-27b            # the model behind the fake RAG API
+  leak_cross_tenant: false      # tests flip this to prove the red team catches a leak

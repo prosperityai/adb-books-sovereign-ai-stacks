@@ -32,8 +32,6 @@ components:
           - ../platform/cilium/enclave-egress-baseline.yaml
           - ../platform/base/egress-test-pod.yaml
           - ../platform/cilium/lb-pool.yaml
-          - ../platform/base/egress-test-pod.yaml
-          - ../platform/cilium/lb-pool.yaml
     charts:
       - name: cilium
         url: https://helm.cilium.io/
@@ -47,12 +45,6 @@ components:
         namespace: gpu
         valuesFiles:
           - ../platform/gpu/device-plugin-values.yaml
-      - name: dcgm-exporter
-        url: https://nvidia.github.io/dcgm-exporter/helm-charts
-        version: 4.8.4
-        namespace: gpu
-        valuesFiles:
-          - ../platform/gpu/dcgm-exporter-values.yaml
       - name: rook-ceph
         url: https://charts.rook.io/release
         version: v1.21.0
@@ -94,6 +86,7 @@ components:
         namespace: ai-gateway
         valuesFiles:
           - ../platform/gateway/litellm-values.yaml
+          - ../platform/observability/litellm-values.observability.yaml
       - name: open-webui
         url: https://helm.openwebui.com
         version: 17.0.0
@@ -155,7 +148,11 @@ components:
           - ../platform/rag/ingest-job.yaml
 
   # --- Chapter 9: observability ---------------------------------------------
-  - name: observability
+  # Three components because of ordering: the Prometheus CRDs must exist
+  # before anything ships a ServiceMonitor (the DCGM chart has no capability
+  # check), and Langfuse needs its database and buckets before it starts.
+  # Hubble's ServiceMonitor is switched on by the Chapter 9 Cilium upgrade.
+  - name: observability-core
     required: true
     charts:
       - name: kube-prometheus-stack
@@ -164,12 +161,41 @@ components:
         namespace: monitoring
         valuesFiles:
           - ../platform/observability/kube-prometheus-values.yaml
+      - name: dcgm-exporter
+        url: https://nvidia.github.io/dcgm-exporter/helm-charts
+        version: 4.8.4
+        namespace: gpu
+        valuesFiles:
+          - ../platform/gpu/dcgm-exporter-values.yaml
+
+  - name: observability-config
+    required: true
+    manifests:
+      - name: observability
+        kustomizations:
+          - ../platform/observability
+
+  - name: observability-apps
+    required: true
+    charts:
       - name: loki
         url: https://grafana.github.io/helm-charts
         version: 7.3.0
         namespace: monitoring
         valuesFiles:
           - ../platform/observability/loki-values.yaml
+      - name: alloy
+        url: https://grafana.github.io/helm-charts
+        version: 1.13.1
+        namespace: monitoring
+        valuesFiles:
+          - ../platform/observability/alloy-values.yaml
+      - name: clickhouse-operator-helm
+        url: oci://ghcr.io/clickhouse/clickhouse-operator-helm
+        version: 0.0.8
+        namespace: monitoring
+        valuesFiles:
+          - ../platform/observability/clickhouse-operator-values.yaml
       - name: langfuse
         url: https://langfuse.github.io/langfuse-k8s
         version: 2.1.5
@@ -180,6 +206,28 @@ components:
   # --- Chapter 10: runtime security and audit -------------------------------
   - name: security
     required: true
+    # The audit database's schema ConfigMap must exist before CloudNativePG
+    # bootstraps audit-db, so it is created from the migration file first.
+    files:
+      - source: ../apps/audit/migrations/001_init.sql
+        target: audit/001_init.sql
+    actions:
+      onDeploy:
+        before:
+          - cmd: >-
+              ./zarf tools kubectl -n ai-gateway create configmap audit-db-schema
+              --from-file=001_init.sql=audit/001_init.sql --dry-run=client -o yaml
+              | ./zarf tools kubectl apply -f -
+    manifests:
+      # Falco mounts this rules ConfigMap by name, so it goes in first.
+      - name: falco-rules
+        namespace: falco
+        kustomizations:
+          - ../platform/security
+      - name: audit-sink
+        namespace: ai-gateway
+        files:
+          - ../platform/security/audit-sink.yaml
     charts:
       - name: falco
         url: https://falcosecurity.github.io/charts
@@ -187,19 +235,79 @@ components:
         namespace: falco
         valuesFiles:
           - ../platform/security/falco-values.yaml
+    images:
+      # Built from apps/audit by the companion repo's CI.
+      - ghcr.io/prosperityai/audit-sink:1.0.0
+
+  # Image signature enforcement is deployed LAST and only after every image
+  # in Harbor has been signed with the enclave key
+  # (platform/security/sign_imported_images.sh). Applied earlier, it rejects
+  # the next rollout of anything unsigned.
+  - name: image-signature-enforcement
+    required: false
     manifests:
-      - name: audit-sink
-        namespace: ai-gateway
+      - name: verify-images
         files:
-          - ../platform/security/audit-sink.yaml
+          - ../platform/policies/verify-images.yaml
+
+  # --- Chapter 11: evaluation -----------------------------------------------
+  # Image only. The eval Job (platform/evals/eval-job.yaml) starts a run when
+  # applied, so it is applied by hand or by upgrade_model.sh, never at deploy.
+  - name: evals
+    required: false
+    images:
+      - ghcr.io/prosperityai/sovereign-evals:1.0.0
 
   # --- Chapter 12: backup and disaster recovery -----------------------------
+  # Before deploying: run ops/scripts/barman_plugin_tls.sh once to create the
+  # plugin's TLS Secrets (the platform has no cert-manager).
   - name: backup
     required: true
     charts:
+      - name: plugin-barman-cloud
+        url: https://cloudnative-pg.github.io/charts
+        version: 0.8.1
+        namespace: cnpg-system
+        valuesFiles:
+          - ../ops/backup/barman-cloud-values.yaml
       - name: velero
         url: https://vmware-tanzu.github.io/helm-charts
         version: 12.2.1
         namespace: velero
         valuesFiles:
           - ../ops/backup/velero-values.yaml
+    manifests:
+      - name: backup-schedules
+        files:
+          - ../ops/backup/cnpg-backup.yaml
+          - ../ops/backup/velero-schedule.yaml
+      - name: qdrant-snapshots
+        namespace: rag
+        kustomizations:
+          - ../ops/backup/qdrant
+    images:
+      # Named only in an environment variable of the plugin Deployment, so
+      # find-images cannot see it. Keep it here when refreshing the lists.
+      - ghcr.io/cloudnative-pg/plugin-barman-cloud-sidecar:v0.15.1
+
+  # --- Chapter 12: next cluster upgrade -------------------------------------
+  # Images for the offline Talos v1.14.4 / Kubernetes v1.37.1 upgrade. The
+  # list is `talosctl images k8s-bundle --k8s-version v1.37.1` (talosctl
+  # 1.14.4) plus one installer image per schematic in cluster.env. Regenerate
+  # it for every upgrade target; upgrade_cluster.sh refuses to start if any
+  # image is missing from Harbor.
+  - name: cluster-upgrade
+    required: false
+    images:
+      - ghcr.io/siderolabs/flannel:0.28.9
+      - registry.k8s.io/coredns/coredns:v1.14.7
+      - registry.k8s.io/etcd:v3.7.2
+      - registry.k8s.io/pause:3.10.2
+      - registry.k8s.io/kube-apiserver:v1.37.1
+      - registry.k8s.io/kube-controller-manager:v1.37.1
+      - registry.k8s.io/kube-scheduler:v1.37.1
+      - registry.k8s.io/kube-proxy:v1.37.1
+      - ghcr.io/siderolabs/kubelet:v1.37.1
+      - registry.k8s.io/networking/kube-network-policies:v1.1.2
+      - factory.talos.dev/metal-installer/376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba:v1.14.4
+      - factory.talos.dev/metal-installer/4d457c0bf926994cfed0e1b1e7c9665c3a5edfdb27cba46c7e84be4d212cc577:v1.14.4

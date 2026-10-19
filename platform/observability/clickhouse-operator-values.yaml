@@ -1,0 +1,39 @@
+# =============================================================================
+# ClickHouse operator 0.0.8 (chart oci://ghcr.io/clickhouse/clickhouse-operator-helm
+# 0.0.8) values — release "clickhouse-operator", namespace monitoring
+# Book: Sovereign AI Stacks, Chapter 9
+#
+# Langfuse chart 2.x no longer bundles a ClickHouse StatefulSet: it renders
+# ClickHouseCluster and KeeperCluster resources and expects this operator to
+# run them. Upstream labels the operator alpha; it is pinned here and every
+# upgrade goes through the Chapter 12 staging process.
+# =============================================================================
+controller:
+  # Only Langfuse's ClickHouse, only in this namespace.
+  watchNamespaces: [monitoring]
+  pdbManagement:
+    enabled: true
+  # One policy language on this platform: Cilium. The operator's generated
+  # Kubernetes NetworkPolicies would be a second set to reason about.
+  networkPolicyManagement:
+    enabled: false
+
+manager:
+  image:
+    tag: v0.0.8
+  resources:
+    requests: {cpu: 10m, memory: 64Mi}
+    limits: {memory: 256Mi}
+
+# The chart's defaults require cert-manager for webhook and metrics TLS.
+# The platform has no cert-manager; the admission webhooks only validate CR
+# fields the Langfuse chart already renders correctly.
+certManager:
+  enabled: false
+webhook:
+  enabled: false
+metrics:
+  enabled: true
+  secure: false
+prometheus:
+  enabled: true

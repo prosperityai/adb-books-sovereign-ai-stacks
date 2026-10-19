@@ -1,0 +1,42 @@
+# =============================================================================
+# Overlay for the LiteLLM release (chart litellm-helm 1.106.0): Prometheus
+# metrics for per-tenant and per-key dashboards and alerts.
+# Book: Sovereign AI Stacks, Chapter 9
+#
+# Layer it after the Chapter 6 values:
+#   helm upgrade litellm ... -f platform/gateway/litellm-values.yaml \
+#                            -f platform/observability/litellm-values.observability.yaml
+# Helm merges maps, so this adds keys to proxy_config.litellm_settings without
+# restating the Chapter 6 callbacks.
+# =============================================================================
+
+# Serve /metrics from a separate process on port 4001. A scrape never lands on
+# an inference worker, and the main port keeps its default of requiring a
+# virtual key for /metrics (require_auth_for_metrics_endpoint is true in 1.106).
+# Port 4001 has no auth, so only Prometheus may reach it
+# (network/scrape-targets.yaml).
+metricsServer:
+  enabled: true
+  port: 4001
+
+# The ServiceMonitor lives in platform/observability/scrape/ with the others.
+serviceMonitor:
+  enabled: false
+
+proxy_config:
+  litellm_settings:
+    callbacks: ["prometheus"]
+    # The default label sets include end_user, user_email, client_ip and
+    # user_agent. Those are personal data and an unbounded number of series.
+    # Per-person usage belongs in the audit sink (Chapter 10); Prometheus
+    # keeps tenant (team_alias), key (api_key_alias) and model.
+    prometheus_exclude_labels:
+      - end_user
+      - user
+      - user_email
+      - user_alias
+      - client_ip
+      - user_agent
+      - hashed_api_key
+    # Buckets that resolve the Chapter 5 SLO (p95 TTFT <= 3 s) precisely.
+    prometheus_latency_buckets: [0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 15.0, 30.0, 60.0, 120.0, 300.0]

@@ -1,0 +1,273 @@
+# =============================================================================
+# kube-prometheus-stack 92.10.1 values (release "kps", namespace monitoring)
+# Prometheus Operator v0.94.1, Prometheus v3.15.0, Alertmanager v0.34.1,
+# Grafana 13.2.4 (subchart grafana 14.0.1)
+# Book: Sovereign AI Stacks, Chapter 9
+#
+# Secrets and ConfigMaps this release expects in monitoring (created in Ch 9):
+#   grafana-admin   keys admin-user, admin-password   break-glass local admin
+#   grafana-oidc    key  GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET (Keycloak client "grafana")
+#   grafana-tls     TLS certificate for grafana.enclave.internal (enclave CA)
+#   enclave-ca      ConfigMap, key ca.crt, so Alertmanager trusts the pager endpoint
+# =============================================================================
+crds:
+  enabled: true
+
+# --- What to scrape ------------------------------------------------------------
+# Talos binds the controller manager, scheduler and etcd metrics to localhost,
+# and Cilium replaces kube-proxy. Scraping them would only produce permanently
+# DOWN targets and a TargetDown alert nobody can fix, so don't.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+windowsMonitoring:
+  enabled: false
+
+defaultRules:
+  create: true
+  rules:
+    etcd: false
+    kubeControllerManager: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeProxy: false
+    windows: false
+  # The upstream runbooks live on the internet. Serve a mirror of
+  # prometheus-operator/runbooks from inside the enclave (Chapter 12).
+  runbookUrl: "https://runbooks.enclave.internal/runbooks"
+
+# --- Prometheus ---------------------------------------------------------------
+prometheus:
+  prometheusSpec:
+    replicas: 2
+    # Pick up every ServiceMonitor, PodMonitor and PrometheusRule in the
+    # cluster, not only those carrying this release's labels. The platform's
+    # monitors live next to the workloads they watch (gpu, inference, ...).
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    scrapeConfigSelectorNilUsesHelmValues: false
+    scrapeInterval: 15s
+    evaluationInterval: 30s
+    externalLabels:
+      cluster: enclave-prod
+    # 30 days answers "what changed since last month?" for chargeback.
+    # retentionSize stops a cardinality accident filling the volume first.
+    retention: 30d
+    retentionSize: 180GB
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: ceph-block
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 200Gi
+    resources:
+      requests: {cpu: "1", memory: 6Gi}
+      limits: {memory: 12Gi}
+    podAntiAffinity: hard
+    # Chart default securityContext already runs as uid 1000, non-root, with
+    # RuntimeDefault seccomp; it is repeated here so the audit trail shows it.
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 2000
+      fsGroup: 2000
+      seccompProfile:
+        type: RuntimeDefault
+
+# --- Alertmanager -------------------------------------------------------------
+alertmanager:
+  alertmanagerSpec:
+    replicas: 2
+    podAntiAffinity: hard
+    configMaps:
+      - enclave-ca         # mounted at /etc/alertmanager/configmaps/enclave-ca/
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: ceph-block
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 5Gi
+    resources:
+      requests: {cpu: 50m, memory: 128Mi}
+      limits: {memory: 256Mi}
+  config:
+    global:
+      resolve_timeout: 5m
+    inhibit_rules:
+      # A failed GPU explains the queue on its node. Only target alerts that
+      # carry Hostname: Alertmanager treats a label missing on both sides as
+      # equal, so a model-level alert here would be muted cluster-wide.
+      - source_matchers: ['alertname = GpuXidCritical']
+        target_matchers: ['alertname = VllmQueueBacklog']
+        equal: ['Hostname']
+      - source_matchers: ['severity = critical']
+        target_matchers: ['severity = warning']
+        equal: ['alertname', 'namespace']
+    route:
+      receiver: platform-oncall
+      group_by: ['alertname', 'namespace', 'model_name', 'Hostname']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      routes:
+        - receiver: "null"
+          matchers: ['alertname = Watchdog']
+        - receiver: "null"
+          matchers: ['alertname = InfoInhibitor']
+        # Audit failures go to security as well as the platform team:
+        # a gap in the audit trail is a compliance incident (Chapter 10).
+        - receiver: security-oncall
+          matchers: ['team = security']
+          continue: true
+        # Everything else, and security alerts after the route above.
+        - receiver: platform-oncall
+    receivers:
+      - name: "null"
+      # The enclave's paging relay. It must sit in the enclave services
+      # subnet (10.20.0.0/24, port 443) or the egress baseline drops it.
+      - name: platform-oncall
+        webhook_configs:
+          - url: https://alerts.enclave.internal/hooks/platform
+            send_resolved: true
+            http_config:
+              tls_config:
+                ca_file: /etc/alertmanager/configmaps/enclave-ca/ca.crt
+      - name: security-oncall
+        webhook_configs:
+          - url: https://alerts.enclave.internal/hooks/security
+            send_resolved: true
+            http_config:
+              tls_config:
+                ca_file: /etc/alertmanager/configmaps/enclave-ca/ca.crt
+    templates:
+      - /etc/alertmanager/config/*.tmpl
+
+prometheusOperator:
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {memory: 512Mi}
+
+kube-state-metrics:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 512Mi}
+
+prometheus-node-exporter:
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 128Mi}
+
+# --- Grafana ------------------------------------------------------------------
+grafana:
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  envFromSecret: grafana-oidc
+
+  # No helm-test pod, no chown init container, no plugin downloads: each of
+  # those pulls an extra image or reaches grafana.com.
+  testFramework:
+    enabled: false
+  initChownData:
+    enabled: false
+  plugins: []
+
+  persistence:
+    enabled: true
+    type: pvc
+    storageClassName: ceph-block
+    accessModes: ["ReadWriteOnce"]
+    size: 10Gi
+
+  resources:
+    requests: {cpu: 200m, memory: 512Mi}
+    limits: {memory: 1Gi}
+
+  ingress:
+    enabled: true
+    ingressClassName: cilium
+    hosts: [grafana.enclave.internal]
+    tls:
+      - secretName: grafana-tls
+        hosts: [grafana.enclave.internal]
+
+  # Dashboards come from ConfigMaps labelled grafana_dashboard=1 in any
+  # namespace (platform/observability/dashboards). UI edits are not saved:
+  # dashboards change by pull request, like everything else.
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
+      provider:
+        allowUiUpdates: false
+        foldersFromFilesStructure: true
+
+  additionalDataSources:
+    - name: Loki
+      uid: loki
+      type: loki
+      access: proxy
+      url: http://loki.monitoring.svc:3100
+      jsonData:
+        maxLines: 5000
+
+  grafana.ini:
+    server:
+      root_url: https://grafana.enclave.internal
+      enable_gzip: true
+    # Every setting below stops a call to grafana.com, stats.grafana.org,
+    # raintank.io or gravatar.com. The egress baseline would drop them anyway;
+    # a sovereign system should not try, and should not show users a
+    # "publish snapshot" button that can only fail.
+    analytics:
+      reporting_enabled: false
+      check_for_updates: false
+      check_for_plugin_updates: false
+      feedback_links_enabled: false
+    news:
+      news_feed_enabled: false
+    snapshots:
+      external_enabled: false
+    security:
+      disable_gravatar: true
+      cookie_secure: true
+    plugins:
+      # Grafana 12+ installs "preinstall" plugins from grafana.com at startup.
+      preinstall_disabled: true
+      preinstall_auto_update: false
+      plugin_admin_enabled: false
+      public_key_retrieval_disabled: true
+    # Sign-in through the enclave Keycloak (realm "government", client
+    # "grafana"). Browser redirects use the public name; token and userinfo
+    # calls stay on the in-cluster service.
+    auth:
+      disable_login_form: false        # local admin kept for break-glass only
+    auth.generic_oauth:
+      enabled: true
+      name: Enclave SSO
+      allow_sign_up: true
+      client_id: grafana
+      scopes: openid profile email
+      # The Keycloak client requires PKCE (S256), like every client in the realm.
+      use_pkce: true
+      auth_url: https://sso.enclave.internal/realms/government/protocol/openid-connect/auth
+      token_url: http://sso-service.identity.svc:8080/realms/government/protocol/openid-connect/token
+      api_url: http://sso-service.identity.svc:8080/realms/government/protocol/openid-connect/userinfo
+      role_attribute_path: "contains(groups[*], 'platform-admins') && 'Admin' || contains(groups[*], 'finance-chargeback') && 'Viewer' || ''"
+      # No matching group, no access: an unmapped account is refused.
+      role_attribute_strict: true

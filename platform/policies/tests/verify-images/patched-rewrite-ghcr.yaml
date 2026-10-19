@@ -1,0 +1,12 @@
+# Expected result of route-through-harbor on the rewrite-ghcr pod.
+# Book: Sovereign AI Stacks, Chapter 10
+apiVersion: v1
+kind: Pod
+metadata: {name: rewrite-ghcr, namespace: ai-gateway}
+spec:
+  containers:
+    - name: litellm
+      image: harbor.enclave.internal/mirror/berriai/litellm:v1.106.0
+      resources:
+        requests: {memory: 2Gi}
+        limits: {memory: 4Gi}

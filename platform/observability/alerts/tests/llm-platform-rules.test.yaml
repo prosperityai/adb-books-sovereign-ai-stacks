@@ -1,0 +1,214 @@
+# =============================================================================
+# llm-platform-rules.test.yaml — promtool unit tests for llm-platform-rules.yaml
+# Book: Sovereign AI Stacks, Chapter 9   promtool 3.15.0
+# Run: platform/observability/alerts/test-rules.sh
+# (The script extracts spec.groups into llm-platform-rules.prom.yaml first:
+#  promtool reads plain rule files, not PrometheusRule objects.)
+# =============================================================================
+rule_files:
+  - llm-platform-rules.prom.yaml
+evaluation_interval: 1m
+
+tests:
+  # --- The war story: four GPUs hot at once is the room, not a card --------
+  - name: fleet overheating fires when four GPUs are hot together
+    interval: 1m
+    input_series:
+      - series: 'DCGM_FI_DEV_GPU_TEMP{Hostname="gpu01", gpu="0"}'
+        values: '86x20'
+      - series: 'DCGM_FI_DEV_GPU_TEMP{Hostname="gpu01", gpu="1"}'
+        values: '85x20'
+      - series: 'DCGM_FI_DEV_GPU_TEMP{Hostname="gpu02", gpu="0"}'
+        values: '87x20'
+      - series: 'DCGM_FI_DEV_GPU_TEMP{Hostname="gpu02", gpu="1"}'
+        values: '84x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: GpuFleetOverheating
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: GpuFleetOverheating
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              team: platform
+            exp_annotations:
+              summary: "4 GPUs above 83 °C at the same time"
+              description: >-
+                Multiple GPUs across servers are hot together. Suspect cooling (CRAC/CRAH, containment
+                doors, blocked tiles) and call facilities now; the platform cannot fix this itself.
+              runbook_url: https://runbooks.enclave.internal/llm-platform/GpuFleetOverheating
+
+  - name: one hot GPU is not a fleet problem
+    interval: 1m
+    input_series:
+      - series: 'DCGM_FI_DEV_GPU_TEMP{Hostname="gpu01", gpu="0"}'
+        values: '90x20'
+      - series: 'DCGM_FI_DEV_GPU_TEMP{Hostname="gpu01", gpu="1"}'
+        values: '62x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: GpuFleetOverheating
+        exp_alerts: []
+
+  - name: thermal violation counter becomes a throttled-time fraction
+    interval: 1m
+    input_series:
+      # 12 s of throttling per 60 s minute = 20% of the time.
+      - series: 'DCGM_FI_DEV_THERMAL_VIOLATION{Hostname="gpu03", gpu="2"}'
+        values: '0+12000000000x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GpuThermalThrottling
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              team: platform
+              Hostname: gpu03
+              gpu: "2"
+            exp_annotations:
+              summary: "GPU 2 on gpu03 thermally throttled 20% of the time"
+              description: >-
+                The SM clock is being reduced to protect the card. Throughput and latency on this GPU drop
+                with it. Check inlet temperature and fans before blaming the model.
+              runbook_url: https://runbooks.enclave.internal/llm-platform/GpuThermalThrottling
+
+  # --- XID errors -----------------------------------------------------------
+  - name: XID 79 (fallen off the bus) is critical, not "other"
+    interval: 1m
+    input_series:
+      - series: 'DCGM_EXP_XID_ERRORS_TOTAL{Hostname="gpu02", gpu="5", xid="79"}'
+        values: '0 0 0 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: GpuXidCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              team: platform
+              Hostname: gpu02
+              gpu: "5"
+              xid: "79"
+            exp_annotations:
+              summary: "XID 79 on GPU 5 (gpu02)"
+              description: >-
+                A hardware-class XID error. Cordon the node, drain the model server, and open a hardware
+                case with the serial number from DCGM. Do not just restart the pod.
+              runbook_url: https://runbooks.enclave.internal/llm-platform/GpuXidCritical
+      - eval_time: 5m
+        alertname: GpuXidOther
+        exp_alerts: []
+
+  # --- Queue depth and the latency SLO ---------------------------------------
+  - name: sustained vLLM queue raises a backlog warning
+    interval: 1m
+    input_series:
+      - series: 'vllm:num_requests_waiting{Hostname="gpu01", model_name="qwen3.8-27b", namespace="inference"}'
+        values: '20x30'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: VllmQueueBacklog
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: VllmQueueBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              team: platform
+              Hostname: gpu01
+              model_name: qwen3.8-27b
+              namespace: inference
+            exp_annotations:
+              summary: "qwen3.8-27b on gpu01: 20 requests queued"
+              description: >-
+                Requests are waiting for a scheduler slot (--max-num-seqs) or KV-cache blocks. If one
+                key dominates, the gateway limits are wrong (Chapter 6); if load is broad, the model needs
+                another replica (Chapter 2's sizing).
+              runbook_url: https://runbooks.enclave.internal/llm-platform/VllmQueueBacklog
+
+  - name: half of requests over 3 s burns the TTFT budget fast
+    interval: 1m
+    input_series:
+      # 100 streamed requests a minute, 50 of them under 3 s.
+      - series: 'litellm_llm_api_time_to_first_token_metric_bucket{model_group="qwen3.8-27b", le="3.0"}'
+        values: '0+50x90'
+      - series: 'litellm_llm_api_time_to_first_token_metric_count{model_group="qwen3.8-27b"}'
+        values: '0+100x90'
+    promql_expr_test:
+      - expr: model_group:litellm_ttft_slow:ratio_rate5m
+        eval_time: 30m
+        exp_samples:
+          - labels: 'model_group:litellm_ttft_slow:ratio_rate5m{model_group="qwen3.8-27b"}'
+            value: 0.5
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LlmTtftSloBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              team: platform
+              model_group: qwen3.8-27b
+            exp_annotations:
+              summary: "qwen3.8-27b: 50% of requests miss the 3 s first-token SLO"
+              description: >-
+                Over the last hour more than 30% of streamed requests to qwen3.8-27b waited
+                longer than 3 s for the first token (budget: 5%). Check vLLM queue depth, KV-cache usage and
+                GPU clocks on the GPU fleet dashboard before scaling anything.
+              runbook_url: https://runbooks.enclave.internal/llm-platform/LlmTtftSloBurn
+
+  - name: healthy latency does not page
+    interval: 1m
+    input_series:
+      # 99 of 100 requests under 3 s: 1% slow, well inside the 5% budget.
+      - series: 'litellm_llm_api_time_to_first_token_metric_bucket{model_group="qwen3.8-27b", le="3.0"}'
+        values: '0+99x90'
+      - series: 'litellm_llm_api_time_to_first_token_metric_count{model_group="qwen3.8-27b"}'
+        values: '0+100x90'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: LlmTtftSloBurnFast
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: LlmTtftSloBurnSlow
+        exp_alerts: []
+
+  # --- Audit trail -----------------------------------------------------------
+  - name: audit sink with no replicas pages security
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="ai-gateway", deployment="audit-sink"}'
+        values: '1 1 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AuditSinkUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              team: security
+              namespace: ai-gateway
+              deployment: audit-sink
+            exp_annotations:
+              summary: The audit sink has no available replicas
+              description: >-
+                LiteLLM keeps serving requests, but the generic_api callback cannot deliver audit events.
+                Every request answered now is a request nobody can account for later.
+              runbook_url: https://runbooks.enclave.internal/llm-platform/AuditSinkUnavailable
+
+  - name: a deleted audit sink is noticed even though no series exists
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="ai-gateway", deployment="litellm"}'
+        values: '2x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: AuditSinkMissing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              team: security
+              namespace: ai-gateway
+              deployment: audit-sink
+            exp_annotations:
+              summary: The audit-sink Deployment does not exist
+              description: Someone deleted or renamed it. Restore it from Git before anything else.
+              runbook_url: https://runbooks.enclave.internal/llm-platform/AuditSinkUnavailable

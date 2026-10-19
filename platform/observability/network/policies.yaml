@@ -1,0 +1,136 @@
+# =============================================================================
+# policies.yaml — ingress rules for observability traffic
+# Book: Sovereign AI Stacks, Chapter 9
+#
+# Egress is already handled: the Chapter 4 baseline lets every pod reach
+# in-cluster endpoints. What needs writing is INGRESS: who may reach the
+# scrape ports, and who may reach the monitoring namespace at all.
+# Cilium policies are additive, but the first ingress policy that selects a
+# pod denies everything not allowed by some policy. Read each selector twice.
+# =============================================================================
+# 1. LiteLLM's dedicated metrics port has no authentication. Prometheus only.
+#    (Port 4000 already admits the monitoring namespace: gateway-ingress-policy.yaml.)
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: litellm-metrics-from-prometheus
+  namespace: ai-gateway
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: litellm
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: monitoring
+            app.kubernetes.io/name: prometheus
+      toPorts:
+        - ports:
+            - {port: "4001", protocol: TCP}
+---
+# 2. CNPG exporters. Adds port 9187 to the database pods' existing policies
+#    (litellm-db-ingress from Chapter 6, audit-db's from Chapter 10).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: cnpg-metrics-from-prometheus
+  namespace: ai-gateway
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: cnpg.io/cluster
+        operator: In
+        values: [litellm-db, audit-db]
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: monitoring
+            app.kubernetes.io/name: prometheus
+      toPorts:
+        - ports:
+            - {port: "9187", protocol: TCP}
+---
+# 3. DCGM exporter. Nothing else in the gpu namespace needs inbound traffic
+#    from pods, so this policy also closes 9400 to everyone but Prometheus.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: dcgm-exporter-from-prometheus
+  namespace: gpu
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: dcgm-exporter
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: monitoring
+            app.kubernetes.io/name: prometheus
+      toPorts:
+        - ports:
+            - {port: "9400", protocol: TCP}
+---
+# 4. The monitoring namespace itself. Its components talk to each other
+#    freely (Alloy pushes to Loki, Grafana queries Prometheus, Langfuse uses
+#    ClickHouse and Valkey). From outside, two doors open for people and
+#    services (policies 5 and 6), plus two control-plane callers here.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: monitoring-ingress
+  namespace: monitoring
+spec:
+  endpointSelector: {}
+  ingress:
+    # Prometheus, Grafana, Loki, Alloy, Langfuse, ClickHouse, Valkey, CNPG...
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: monitoring
+    # The Prometheus Operator's admission webhook is called by the API server.
+    - fromEntities: [kube-apiserver]
+    # The CloudNativePG operator manages langfuse-db (status and failover).
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: cnpg-system
+      toPorts:
+        - ports:
+            - {port: "8000", protocol: TCP}
+            - {port: "5432", protocol: TCP}
+---
+# 5. Users reach Grafana and Langfuse only through the shared ingress.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: monitoring-ui-from-ingress
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [grafana, langfuse]
+  ingress:
+    - fromEntities: [ingress]
+      toPorts:
+        - ports:
+            - {port: "3000", protocol: TCP}
+---
+# 6. LiteLLM sends traces (OTLP over HTTP) to langfuse-web.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: langfuse-web-from-gateway
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: langfuse
+      app.kubernetes.io/component: web
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: ai-gateway
+            app.kubernetes.io/name: litellm
+      toPorts:
+        - ports:
+            - {port: "3000", protocol: TCP}

@@ -1,0 +1,150 @@
+# =============================================================================
+# verify-images — only admit container images signed by the enclave key
+# Book: Sovereign AI Stacks, Chapter 10 (threats T3 and T12)
+# Kyverno 1.19.1 (chart 3.9.1); signatures made with cosign 2.6.5
+#
+# Three rules:
+#   1. route-through-harbor (mutate) rewrites every image to the Harbor path
+#      the node really pulls from (Chapter 4's registry mirrors), so the pod
+#      spec tells the truth and Kyverno can reach the registry.
+#   2. require-harbor-registry (validate) rejects any image the rewrite missed.
+#   3. verify-enclave-signature (verifyImages) rejects any harbor image without
+#      a valid signature from the enclave admission key, and pins the admitted
+#      image to its digest.
+#
+# The public key lives in ConfigMap kyverno/enclave-cosign-pub (key pubkey),
+# so a key rotation (docs/evidence-pack, T12 runbook) changes data, not policy.
+# kube-system and kyverno are excluded: the CNI and the policy engine must be
+# able to start when Kyverno itself is down. Their images are covered by the
+# Chapter 3 bundle signature and digest pins instead.
+# =============================================================================
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-images
+  annotations:
+    policies.kyverno.io/title: Verify enclave image signatures
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Rewrites container images to the Harbor mirror path and requires a cosign
+      signature from the enclave admission key on every image served by
+      harbor.enclave.internal. Unsigned or foreign-signed images are rejected.
+spec:
+  # Signature checks call Harbor; give them time, and never admit on timeout.
+  webhookTimeoutSeconds: 30
+  failurePolicy: Fail
+  background: false
+  rules:
+    - name: route-through-harbor
+      match:
+        any:
+          - resources:
+              kinds: [Pod, Pod/ephemeralcontainers]
+      exclude:
+        any:
+          - resources:
+              namespaces: [kube-system, kyverno]
+      mutate:
+        foreach:
+          - list: "request.object.spec.containers"
+            preconditions:
+              all:
+                - key: "{{ element.image }}"
+                  operator: NotEquals
+                  value: "harbor.enclave.internal/*"
+            patchStrategicMerge:
+              spec:
+                containers:
+                  - name: "{{ element.name }}"
+                    image: >-
+                      {{ regex_replace_all('^(?:[^/]+[.:][^/]*/|localhost/)?(.+)$', '{{ element.image }}',
+                      'harbor.enclave.internal/mirror/$1') }}
+          - list: "request.object.spec.initContainers || `[]`"
+            preconditions:
+              all:
+                - key: "{{ element.image }}"
+                  operator: NotEquals
+                  value: "harbor.enclave.internal/*"
+            patchStrategicMerge:
+              spec:
+                initContainers:
+                  - name: "{{ element.name }}"
+                    image: >-
+                      {{ regex_replace_all('^(?:[^/]+[.:][^/]*/|localhost/)?(.+)$', '{{ element.image }}',
+                      'harbor.enclave.internal/mirror/$1') }}
+          - list: "request.object.spec.ephemeralContainers || `[]`"
+            preconditions:
+              all:
+                - key: "{{ element.image }}"
+                  operator: NotEquals
+                  value: "harbor.enclave.internal/*"
+            patchStrategicMerge:
+              spec:
+                ephemeralContainers:
+                  - name: "{{ element.name }}"
+                    image: >-
+                      {{ regex_replace_all('^(?:[^/]+[.:][^/]*/|localhost/)?(.+)$', '{{ element.image }}',
+                      'harbor.enclave.internal/mirror/$1') }}
+
+    # Backstop: verifyImages only checks images that match imageReferences, so
+    # an image that escaped the rewrite would be admitted unverified. Nothing
+    # may run from anywhere but Harbor.
+    - name: require-harbor-registry
+      match:
+        any:
+          - resources:
+              kinds: [Pod, Pod/ephemeralcontainers]
+      exclude:
+        any:
+          - resources:
+              namespaces: [kube-system, kyverno]
+      validate:
+        failureAction: Enforce
+        cel:
+          expressions:
+            - expression: >-
+                object.spec.containers.all(c, c.image.startsWith('harbor.enclave.internal/')) &&
+                (!has(object.spec.initContainers) ||
+                  object.spec.initContainers.all(c, c.image.startsWith('harbor.enclave.internal/'))) &&
+                (!has(object.spec.ephemeralContainers) ||
+                  object.spec.ephemeralContainers.all(c, c.image.startsWith('harbor.enclave.internal/')))
+              message: "every image must be pulled from harbor.enclave.internal"
+
+    - name: verify-enclave-signature
+      match:
+        any:
+          - resources:
+              kinds: [Pod, Pod/ephemeralcontainers]
+      exclude:
+        any:
+          - resources:
+              namespaces: [kube-system, kyverno]
+      context:
+        - name: enclavekey
+          configMap:
+            name: enclave-cosign-pub
+            namespace: kyverno
+      verifyImages:
+        - imageReferences:
+            - "harbor.enclave.internal/*"
+          failureAction: Enforce
+          # Replace tags with the verified digest, and refuse a digest that
+          # does not match the signed one. A tag can move; a digest cannot.
+          mutateDigest: true
+          verifyDigest: true
+          required: true
+          # Harbor robot account for reading signatures (Secret in kyverno ns).
+          imageRegistryCredentials:
+            secrets: [harbor-signature-reader]
+          attestors:
+            - count: 1
+              entries:
+                - keys:
+                    publicKeys: "{{ enclavekey.data.pubkey }}"
+                    signatureAlgorithm: sha256
+                    # No transparency log or CT log exists inside the enclave;
+                    # signatures were made with --tlog-upload=false.
+                    rekor:
+                      ignoreTlog: true
+                    ctlog:
+                      ignoreSCT: true

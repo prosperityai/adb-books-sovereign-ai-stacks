@@ -1,0 +1,19 @@
+# =============================================================================
+# ops/backup/qdrant — nightly per-node Qdrant snapshots to backup.enclave.internal
+# Book: Sovereign AI Stacks, Chapter 12
+# Apply:  kubectl apply -k ops/backup/qdrant
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: rag
+resources:
+  - qdrant-snapshot.yaml
+# The script ships as a ConfigMap. No hash suffix: every CronJob run starts a
+# fresh pod, so a changed script is picked up on the next run anyway, and the
+# DR drill's verify Job can mount the same ConfigMap by a fixed name.
+configMapGenerator:
+  - name: qdrant-snapshot-script
+    files:
+      - qdrant_snapshot.py
+generatorOptions:
+  disableNameSuffixHash: true

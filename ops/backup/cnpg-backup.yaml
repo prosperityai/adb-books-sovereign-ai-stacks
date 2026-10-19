@@ -1,0 +1,165 @@
+# =============================================================================
+# cnpg-backup.yaml — continuous WAL archiving and nightly base backups for the
+# three CloudNativePG clusters, to the off-cluster S3 appliance
+# Book: Sovereign AI Stacks, Chapter 12
+# CloudNativePG 1.30.1 + Barman Cloud plugin v0.15.1 (chart plugin-barman-cloud 0.8.1)
+#
+# This uses the plugin's ObjectStore CRD, not the in-tree
+# spec.backup.barmanObjectStore, which is deprecated in CloudNativePG 1.26+.
+# Each Cluster also needs a spec.plugins entry naming its ObjectStore; that
+# is the one-stanza patch in Chapter 12 (12.3).
+#
+# Secrets in EACH namespace (ai-gateway, identity):
+#   cnpg-backup-s3       ACCESS_KEY_ID, ACCESS_SECRET_KEY: a key limited to the
+#                        "cnpg" bucket on backup.enclave.internal
+#   backup-appliance-ca  key "ca.crt": the enclave CA
+#
+# One ObjectStore per cluster, so each data class carries its own retention.
+# =============================================================================
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: litellm-db-store
+  namespace: ai-gateway
+spec:
+  # Keys, teams, budgets and spend. Thirty days of point-in-time recovery.
+  retentionPolicy: "30d"
+  configuration:
+    destinationPath: s3://cnpg/ai-gateway/
+    endpointURL: https://backup.enclave.internal
+    endpointCA:
+      name: backup-appliance-ca
+      key: ca.crt
+    s3Credentials:
+      accessKeyId:
+        name: cnpg-backup-s3
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: cnpg-backup-s3
+        key: ACCESS_SECRET_KEY
+    wal:
+      compression: zstd
+      maxParallel: 4
+    data:
+      compression: gzip
+      jobs: 2
+  instanceSidecarConfiguration:
+    retentionPolicyIntervalSeconds: 1800
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {memory: 512Mi}
+---
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: audit-db-store
+  namespace: ai-gateway
+spec:
+  # The audit trail (Chapter 10). Backups are not the archive: tenant
+  # retention is enforced by the audit sink; this is how long a deleted or
+  # corrupted audit table can still be recovered.
+  retentionPolicy: "90d"
+  configuration:
+    destinationPath: s3://cnpg/ai-gateway/
+    endpointURL: https://backup.enclave.internal
+    endpointCA:
+      name: backup-appliance-ca
+      key: ca.crt
+    s3Credentials:
+      accessKeyId:
+        name: cnpg-backup-s3
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: cnpg-backup-s3
+        key: ACCESS_SECRET_KEY
+    wal:
+      compression: zstd
+      maxParallel: 4
+    data:
+      compression: gzip
+      jobs: 2
+  instanceSidecarConfiguration:
+    retentionPolicyIntervalSeconds: 1800
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {memory: 512Mi}
+---
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: keycloak-db-store
+  namespace: identity
+spec:
+  retentionPolicy: "30d"
+  configuration:
+    destinationPath: s3://cnpg/identity/
+    endpointURL: https://backup.enclave.internal
+    endpointCA:
+      name: backup-appliance-ca
+      key: ca.crt
+    s3Credentials:
+      accessKeyId:
+        name: cnpg-backup-s3
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: cnpg-backup-s3
+        key: ACCESS_SECRET_KEY
+    wal:
+      compression: zstd
+      maxParallel: 4
+    data:
+      compression: gzip
+      jobs: 2
+  instanceSidecarConfiguration:
+    retentionPolicyIntervalSeconds: 1800
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {memory: 512Mi}
+---
+# CloudNativePG cron expressions have SIX fields: the first is seconds.
+# 22:00, 22:20 and 22:40 UTC (01:00-01:40 in East Africa): staggered so three
+# base backups never compete for the appliance's write bandwidth at once.
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: litellm-db-nightly
+  namespace: ai-gateway
+spec:
+  schedule: "0 0 22 * * *"
+  immediate: true
+  backupOwnerReference: self
+  cluster:
+    name: litellm-db
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: audit-db-nightly
+  namespace: ai-gateway
+spec:
+  schedule: "0 20 22 * * *"
+  immediate: true
+  backupOwnerReference: self
+  cluster:
+    name: audit-db
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: keycloak-db-nightly
+  namespace: identity
+spec:
+  schedule: "0 40 22 * * *"
+  immediate: true
+  backupOwnerReference: self
+  cluster:
+    name: keycloak-db
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io

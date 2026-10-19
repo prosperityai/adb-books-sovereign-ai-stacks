@@ -1,0 +1,58 @@
+# =============================================================================
+# known-metrics.txt — every metric name dashboards and alerts may reference
+# Book: Sovereign AI Stacks, Chapter 9
+#
+# Format: <name> <type>. A histogram also allows <name>_bucket, _sum, _count.
+# Counters are listed with the _total suffix Prometheus clients expose.
+# DCGM_FI_* and DCGM_EXP_* names are NOT listed here: obs_lint.py reads them
+# from platform/gpu/dcgm-exporter-values.yaml, so a panel that uses a field
+# the exporter was never told to collect fails the lint instead of rendering
+# an empty graph.
+#
+# Sources (checked against these exact releases):
+#   vLLM 0.32.0            vllm/v1/metrics/loggers.py
+#   LiteLLM 1.106.0        litellm/integrations/prometheus.py
+#   kube-state-metrics     v2.20.0 (kube-prometheus-stack 92.10.1)
+#   CloudNativePG 1.30.1   docs/src/monitoring.md
+# =============================================================================
+
+# Prometheus itself
+up gauge
+
+# vLLM 0.32.0
+vllm:num_requests_running gauge
+vllm:num_requests_waiting gauge
+vllm:kv_cache_usage_perc gauge
+vllm:time_to_first_token_seconds histogram
+vllm:inter_token_latency_seconds histogram
+vllm:e2e_request_latency_seconds histogram
+vllm:request_queue_time_seconds histogram
+vllm:request_prefill_time_seconds histogram
+vllm:request_decode_time_seconds histogram
+vllm:prompt_tokens_total counter
+vllm:generation_tokens_total counter
+vllm:num_preemptions_total counter
+vllm:request_success_total counter
+vllm:prefix_cache_hits_total counter
+vllm:prefix_cache_queries_total counter
+
+# LiteLLM 1.106.0 (prometheus callback)
+litellm_total_tokens_metric_total counter
+litellm_input_tokens_metric_total counter
+litellm_output_tokens_metric_total counter
+litellm_spend_metric_total counter
+litellm_proxy_total_requests_metric_total counter
+litellm_proxy_failed_requests_metric_total counter
+litellm_callback_logging_failures_metric_total counter
+litellm_request_total_latency_metric histogram
+litellm_llm_api_latency_metric histogram
+litellm_llm_api_time_to_first_token_metric histogram
+litellm_deployment_state gauge
+
+# kube-state-metrics v2.20.0
+kube_deployment_status_replicas_available gauge
+kube_pod_container_resource_requests gauge
+kube_node_status_allocatable gauge
+
+# CloudNativePG 1.30.1
+cnpg_collector_up gauge

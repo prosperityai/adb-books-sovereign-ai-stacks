@@ -13,3 +13,12 @@ features:
   # Policy reports feed Chapter 10's evidence pack.
   policyReports:
     enabled: true
+# Chapter 10: image signature verification fetches signatures from Harbor over
+# TLS, so every Kyverno controller must trust the enclave CA. The PEM is not
+# stored in this file; pass it at install time:
+#   helm upgrade --install kyverno kyverno/kyverno -n kyverno --version 3.9.1 \
+#     -f platform/policies/kyverno-values.yaml \
+#     --set-file global.caCertificates.data=enclave-ca.crt
+global:
+  caCertificates:
+    data: ""

@@ -1,0 +1,68 @@
+# =============================================================================
+# cnpg-restore.yaml.tmpl — recover one CloudNativePG cluster from the backup
+# appliance into the drill namespace. Rendered by ops/scripts/dr_drill.sh
+# (envsubst); the same shape is the real recovery manifest in a disaster.
+# Book: Sovereign AI Stacks, Chapter 12
+#
+# No spec.plugins on the recovered cluster: it must NOT archive WAL. A
+# restored cluster archiving under the source's serverName would write into
+# the production backup chain.
+# =============================================================================
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: drill-${CLUSTER}-store
+  namespace: ${DRILL_NS}
+spec:
+  configuration:
+    destinationPath: ${DESTINATION}
+    endpointURL: https://backup.enclave.internal
+    endpointCA:
+      name: backup-appliance-ca
+      key: ca.crt
+    s3Credentials:
+      accessKeyId:
+        name: cnpg-backup-s3
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: cnpg-backup-s3
+        key: ACCESS_SECRET_KEY
+    wal:
+      maxParallel: 8
+  instanceSidecarConfiguration:
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {memory: 512Mi}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: drill-${CLUSTER}
+  namespace: ${DRILL_NS}
+  labels:
+    sovereign-ai/dr-drill: "${DRILL_ID}"
+spec:
+  instances: 1
+  imageName: ${IMAGE}
+  storage:
+    storageClass: ceph-block
+    size: ${SIZE}
+  bootstrap:
+    recovery:
+      source: origin
+      # Stop exactly where the archive stood when the disaster was declared.
+      # Without this, recovery replays WAL the still-running primary kept
+      # shipping during the drill, and the measured RPO flatters you.
+      recoveryTarget:
+        targetLSN: "${TARGET_LSN}"
+        targetInclusive: false
+  externalClusters:
+    - name: origin
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: drill-${CLUSTER}-store
+          serverName: ${CLUSTER}
+  resources:
+    requests: {cpu: "1", memory: 2Gi}
+    limits: {memory: 4Gi}
