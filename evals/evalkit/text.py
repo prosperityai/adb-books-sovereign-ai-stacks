@@ -13,10 +13,21 @@ import re
 import unicodedata
 
 # Arabic short vowels, shadda, sukun, tanween, dagger alef and Quranic marks.
-_AR_MARKS = re.compile(r"[ؐ-ًؚ-ٰٟۖ-ۭ]")
+_AR_MARKS = re.compile(r"[\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06ed]")
 _TATWEEL = "ـ"
 # Hamza and alef variants, alef maqsura and ta marbuta: writers vary, meaning does not.
-_AR_FOLD = str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا", "ى": "ي", "ة": "ه", "ؤ": "و", "ئ": "ي"})
+_AR_FOLD = str.maketrans(
+    {
+        "\u0623": "\u0627",  # alef with hamza above -> alef
+        "\u0625": "\u0627",  # alef with hamza below -> alef
+        "\u0622": "\u0627",  # alef with madda -> alef
+        "\u0671": "\u0627",  # alef wasla -> alef
+        "\u0649": "\u064a",  # alef maksura -> yeh
+        "\u0629": "\u0647",  # teh marbuta -> heh
+        "\u0624": "\u0648",  # waw with hamza -> waw
+        "\u0626": "\u064a",  # yeh with hamza -> yeh
+    }
+)
 # Arabic-Indic and Extended Arabic-Indic digits to ASCII, so "٢٨" matches "28".
 _DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
 _HYPHENS = str.maketrans({"‐": "-", "‑": "-", "‒": "-", "–": "-", "—": "-", "−": "-"})
